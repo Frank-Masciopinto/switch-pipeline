@@ -13,6 +13,9 @@ x-app: &app
   volumes:
     - ./config:/app/config:ro # quality rules: edit, then `make restart-consumer`
     - ./secrets:/run/secrets:ro # Snowflake private key (git-ignored)
+  # A minimal init as PID 1 forwards signals: PID 1 itself ignores any signal it has
+  # no handler for, so a SIGTERM arriving during start-up was silently dropped.
+  init: true
   # Hardening: immutable root filesystem, no Linux capabilities, no setuid escalation.
   read_only: true
   tmpfs:
