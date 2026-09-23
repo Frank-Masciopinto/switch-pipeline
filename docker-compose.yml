@@ -13,6 +13,13 @@ x-app: &app
   volumes:
     - ./config:/app/config:ro # quality rules: edit, then `make restart-consumer`
     - ./secrets:/run/secrets:ro # Snowflake private key (git-ignored)
+  # Hardening: immutable root filesystem, no Linux capabilities, no setuid escalation.
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m # heartbeats and library caches (HOME points here)
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
 
 x-worker-healthcheck: &worker-healthcheck
   interval: 15s

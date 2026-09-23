@@ -28,9 +28,12 @@ RUN groupadd --system --gid 10001 switch \
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY config ./config
+# The root filesystem is read-only at runtime; HOME on the /tmp tmpfs keeps
+# library caches (e.g. the Snowflake connector's OCSP cache) writable.
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/tmp
 USER switch
 ENTRYPOINT ["switch-pipeline"]
 CMD ["--help"]
