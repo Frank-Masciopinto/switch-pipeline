@@ -1,0 +1,142 @@
+# Every value is interpolated from .env (template: .env.example). Change settings
+# there, not here. Optional services are enabled with COMPOSE_PROFILES in .env.
+
+x-app: &app
+  image: switch-pipeline:local
+  build:
+    context: .
+    args:
+      PYTHON_IMAGE: ${PYTHON_IMAGE:?set PYTHON_IMAGE in .env}
+      UV_IMAGE: ${UV_IMAGE:?set UV_IMAGE in .env}
+  env_file: .env
+  restart: unless-stopped
+  volumes:
+    - ./config:/app/config:ro # quality rules: edit, then `make restart-consumer`
+    - ./secrets:/run/secrets:ro # Snowflake private key (git-ignored)
+
+x-worker-healthcheck: &worker-healthcheck
+  interval: 15s
+  timeout: 5s
+  retries: 3
+  start_period: 30s
+
+services:
+  redpanda:
+    image: ${REDPANDA_IMAGE:?set REDPANDA_IMAGE in .env}
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:${KAFKA_HOST_PORT:?set KAFKA_HOST_PORT in .env}
+      # Topics are provisioned explicitly by `init`; a typo must fail, not create a topic.
+      - --set=redpanda.auto_create_topics_enabled=false
+    ports:
+      - "${KAFKA_HOST_PORT}:19092"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -qE 'Healthy:.+true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  postgres:
+    image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE in .env}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGPORT: ${POSTGRES_PORT:?set POSTGRES_PORT in .env}
+    ports:
+      - "${POSTGRES_HOST_PORT:?set POSTGRES_HOST_PORT in .env}:${POSTGRES_PORT}"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  snowflake-emulator:
+    image: ${SNOWFLAKE_EMULATOR_IMAGE:?set SNOWFLAKE_EMULATOR_IMAGE in .env}
+    profiles: [emulator]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 64616), 2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  init:
+    <<: *app
+    command: ["init"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  adapter:
+    <<: *app
+    command: ["adapter"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      snowflake-emulator:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      <<: *worker-healthcheck
+      test: ["CMD-SHELL", "python -m switch_pipeline.healthcheck heartbeat \"$${ADAPTER_HEARTBEAT_PATH}\" --max-age \"$${HEALTHCHECK_MAX_AGE_SECONDS}\""]
+
+  consumer:
+    <<: *app
+    command: ["consumer"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *worker-healthcheck
+      test: ["CMD-SHELL", "python -m switch_pipeline.healthcheck heartbeat \"$${CONSUMER_HEARTBEAT_PATH}\" --max-age \"$${HEALTHCHECK_MAX_AGE_SECONDS}\""]
+
+  api:
+    <<: *app
+    command: ["api"]
+    ports:
+      - "${API_HOST_PORT:?set API_HOST_PORT in .env}:${API_PORT:?set API_PORT in .env}"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *worker-healthcheck
+      test: ["CMD-SHELL", "python -m switch_pipeline.healthcheck http \"http://localhost:$${API_PORT}/readyz\""]
+
+  # One-off commands: `docker compose run --rm tools <command>` (see the Makefile).
+  tools:
+    <<: *app
+    profiles: [tools]
+    restart: "no"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      snowflake-emulator:
+        condition: service_healthy
+        required: false
+
+  console:
+    image: ${REDPANDA_CONSOLE_IMAGE:?set REDPANDA_CONSOLE_IMAGE in .env}
+    profiles: [ui]
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "${REDPANDA_CONSOLE_HOST_PORT:?set REDPANDA_CONSOLE_HOST_PORT in .env}:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+volumes:
+  redpanda-data:
+  postgres-data:
