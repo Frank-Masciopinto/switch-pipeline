@@ -8,22 +8,27 @@ exercised against emulated Snowflake, PostgreSQL and Redpanda in tests/integrati
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import pytest
+from structlog.testing import capture_logs
 
 from switch_pipeline.adapter.cursor import CursorRegressionError, SyncCursor
 from switch_pipeline.adapter.mapper import EventMapper
 from switch_pipeline.adapter.publisher import PublishError
 from switch_pipeline.adapter.service import SyncService
-from switch_pipeline.adapter.source import SourceRow
+from switch_pipeline.adapter.source import SourceRow, SourceUnavailableError
 from switch_pipeline.adapter.state import SyncMode, SyncState
 from switch_pipeline.domain.envelope import ChangeEvent, EventType
+from switch_pipeline.lifecycle import Heartbeat, Shutdown
+from switch_pipeline.retry import Backoff
 from tests.helpers import SOURCE, T0
 
 SOURCE_ID = "snowflake:TEST"
 BULK_LOADED_AT = T0 - timedelta(minutes=1)
+FAST_RETRIES = Backoff(initial_seconds=0.001, max_seconds=0.002)
 
 
 class FakeSource:
@@ -271,3 +276,101 @@ def test_an_empty_source_completes_the_initial_sync(
     result = make_service(FakeSource(), store, broker).run_cycle()
     assert (result.rows, result.caught_up) == (0, True)
     assert store.load(SOURCE_ID).mode is SyncMode.INCREMENTAL
+
+
+class StopAfter(BrokerLog):
+    """Requests shutdown once the broker holds every expected key."""
+
+    def __init__(self, shutdown: Shutdown, expected_keys: int) -> None:
+        super().__init__()
+        self._shutdown = shutdown
+        self._expected = expected_keys
+
+    def publish(self, events: Sequence[ChangeEvent]) -> None:
+        super().publish(events)
+        if len(set(self.keys())) >= self._expected:
+            self._shutdown.request()
+
+
+def run_forever(service: SyncService, shutdown: Shutdown, heartbeat_path: Path | None) -> None:
+    service.run_forever(
+        poll_interval_seconds=0.01,
+        backoff=FAST_RETRIES,
+        shutdown=shutdown,
+        heartbeat=Heartbeat(heartbeat_path),
+    )
+
+
+def test_run_forever_waits_for_a_missing_source_table_then_syncs(
+    store: MemoryStateStore, tmp_path: Path
+) -> None:
+    class NotSeededYet(FakeSource):
+        missing_fetches = 2
+
+        def fetch_changes(
+            self, cursor: SyncCursor | None, upper_bound: datetime, limit: int
+        ) -> list[SourceRow]:
+            if self.missing_fetches:
+                self.missing_fetches -= 1
+                raise SourceUnavailableError("CUSTOMER_ORDERS does not exist")
+            return super().fetch_changes(cursor, upper_bound, limit)
+
+    source = NotSeededYet()
+    for key in (1, 2, 3):
+        source.write(key, at=BULK_LOADED_AT)
+    shutdown = Shutdown()
+    broker = StopAfter(shutdown, expected_keys=3)
+    with capture_logs() as logs:
+        run_forever(make_service(source, store, broker), shutdown, tmp_path / "heartbeat")
+    assert broker.keys() == ["1", "2", "3"]
+    events = [entry["event"] for entry in logs]
+    assert events.count("source_unavailable") == 2
+    assert "sync_cycle_failed" not in events, "a missing table is expected, not an error"
+    assert (tmp_path / "heartbeat").exists()
+
+
+def test_run_forever_retries_transient_failures_until_the_cycle_succeeds(
+    source: FakeSource, store: MemoryStateStore
+) -> None:
+    shutdown = Shutdown()
+    broker = StopAfter(shutdown, expected_keys=7)
+    broker.failures_to_inject = 2
+    with capture_logs() as logs:
+        run_forever(make_service(source, store, broker), shutdown, None)
+    assert set(broker.keys()) == {str(key) for key in range(1, 8)}
+    assert [entry["event"] for entry in logs].count("sync_cycle_failed") == 2
+    assert store.cursor == SyncCursor(updated_at=BULK_LOADED_AT, key=7)
+
+
+def test_run_forever_stops_on_errors_that_retrying_cannot_fix(
+    store: MemoryStateStore, broker: BrokerLog
+) -> None:
+    class UnorderedSource(FakeSource):
+        def fetch_changes(
+            self, cursor: SyncCursor | None, upper_bound: datetime, limit: int
+        ) -> list[SourceRow]:
+            return list(reversed(super().fetch_changes(cursor, upper_bound, limit)))
+
+    broken = UnorderedSource()
+    broken.write(1, at=BULK_LOADED_AT)
+    broken.write(2, at=BULK_LOADED_AT)
+    with pytest.raises(CursorRegressionError):
+        run_forever(make_service(broken, store, broker), Shutdown(), None)
+
+
+def test_a_shutdown_during_a_failing_cycle_exits_without_an_error(
+    source: FakeSource, store: MemoryStateStore
+) -> None:
+    shutdown = Shutdown()
+
+    class BrokerDownDuringShutdown(BrokerLog):
+        def publish(self, events: Sequence[ChangeEvent]) -> None:
+            shutdown.request()
+            raise PublishError("shutdown requested while retrying delivery")
+
+    with capture_logs() as logs:
+        run_forever(make_service(source, store, BrokerDownDuringShutdown()), shutdown, None)
+    events = [entry["event"] for entry in logs]
+    assert "sync_cycle_interrupted_by_shutdown" in events
+    assert "sync_cycle_failed" not in events
+    assert store.cursor is None

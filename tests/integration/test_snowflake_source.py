@@ -2,12 +2,15 @@
 
 from datetime import UTC
 
+import pytest
+
 from switch_pipeline.adapter.cursor import SyncCursor, advance_cursor
 from switch_pipeline.adapter.source import (
     SnowflakeChangeSource,
     SnowflakeConnectionFactory,
     SourceRow,
     SourceTable,
+    SourceUnavailableError,
 )
 from switch_pipeline.settings import SnowflakeSettings
 from switch_pipeline.tools.seed import seed_source
@@ -76,6 +79,17 @@ def test_changes_after_the_watermark_are_captured_with_their_new_versions(
     assert all(versions[key] == 2 for key in report.updated)
     status_update = next(key for key, kind in invalid.items() if kind == "unknown_order_status")
     assert versions[status_update] == 2
+
+
+def test_a_missing_table_is_reported_as_unavailable_with_a_hint(
+    snowflake_settings: SnowflakeSettings,
+) -> None:
+    source = change_source(snowflake_settings)
+    try:
+        with pytest.raises(SourceUnavailableError, match="make seed"):
+            source.fetch_changes(None, source.upper_bound(0), 10)
+    finally:
+        source.close()
 
 
 def test_rows_younger_than_the_settle_window_are_left_for_later(

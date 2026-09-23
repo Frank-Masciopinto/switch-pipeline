@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 from switch_pipeline.adapter.cursor import SyncCursor, advance_cursor
 from switch_pipeline.adapter.mapper import EventMapper
 from switch_pipeline.adapter.publisher import EventPublisher
-from switch_pipeline.adapter.source import ChangeSource, SourceRow
+from switch_pipeline.adapter.source import ChangeSource, SourceRow, SourceUnavailableError
 from switch_pipeline.adapter.state import SyncMode, SyncStateStore
 from switch_pipeline.domain.envelope import EventType
 from switch_pipeline.errors import FatalPipelineError
@@ -113,7 +113,14 @@ class SyncService:
                 result = self.run_cycle()
             except FatalPipelineError:
                 raise
+            except SourceUnavailableError as exc:
+                consecutive_failures += 1
+                delay = backoff.delay(consecutive_failures)
+                log.warning("source_unavailable", error=str(exc), retry_in_seconds=round(delay, 2))
             except Exception:
+                if shutdown.requested:  # e.g. a retry wait cut short by SIGTERM
+                    log.info("sync_cycle_interrupted_by_shutdown")
+                    return
                 consecutive_failures += 1
                 delay = backoff.delay(consecutive_failures)
                 log.exception(

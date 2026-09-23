@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 import snowflake.connector
 from snowflake.connector import DictCursor, SnowflakeConnection
+from snowflake.connector.errors import ProgrammingError
 
 from switch_pipeline.adapter.cursor import SyncCursor
 from switch_pipeline.errors import FatalPipelineError
@@ -18,9 +19,16 @@ log = get_logger(__name__)
 
 _IDENTIFIER = re.compile(SNOWFLAKE_IDENTIFIER)
 
+# Snowflake's "Object ... does not exist or not authorized" (tables, schemas, databases).
+OBJECT_MISSING_ERRNO = 2003
+
 
 class SourceContractError(FatalPipelineError):
     """A row violates the source contract (e.g. NULL key, version or timestamp)."""
+
+
+class SourceUnavailableError(Exception):
+    """The source table is missing or not visible to the role; retried until it appears."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +205,14 @@ class SnowflakeChangeSource:
                 cursor.execute(query, params)
                 rows: list[dict[str, Any]] = cursor.fetchall()
                 return rows
+        except ProgrammingError as exc:
+            self.close()
+            if exc.errno == OBJECT_MISSING_ERRNO:
+                raise SourceUnavailableError(
+                    f"{self._table.qualified_name} does not exist or the role cannot see it: "
+                    "run `make seed`, or check the grants in snowflake/setup.sql"
+                ) from exc
+            raise
         except Exception:
             self.close()
             raise
