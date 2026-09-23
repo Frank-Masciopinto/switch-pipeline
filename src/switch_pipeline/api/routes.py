@@ -29,14 +29,8 @@ from switch_pipeline.api.schemas import (
     Watermark,
 )
 from switch_pipeline.domain.envelope import EventType
+from switch_pipeline.domain.quarantine import QuarantineReason
 from switch_pipeline.settings import ApiSettings
-
-_QUARANTINE_REASONS = (
-    "schema_violation",
-    "quality_rule_failed",
-    "event_id_conflict",
-    "sink_rejected",
-)
 
 
 def get_pool(request: Request) -> AsyncConnectionPool:
@@ -174,7 +168,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
     )
     async def list_quarantine(
         pool: Pool,
-        reason: Annotated[str | None, Query(enum=list(_QUARANTINE_REASONS))] = None,
+        reason: QuarantineReason | None = None,
         entity_key: Annotated[str | None, Query(max_length=512)] = None,
         limit: PageSize = settings.page_size_default,
         cursor: str | None = None,
@@ -182,7 +176,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
         async with pool.connection() as conn:
             rows, next_before = await queries.list_quarantine(
                 conn,
-                reason=reason,
+                reason=reason.value if reason else None,
                 entity_key=entity_key,
                 limit=limit,
                 before=_cursor_param(cursor),

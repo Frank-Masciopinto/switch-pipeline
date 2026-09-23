@@ -23,6 +23,7 @@ import psycopg
 from switch_pipeline.consumer.decoding import InboundMessage, SchemaViolation, decode
 from switch_pipeline.consumer.repository import SinkRepository
 from switch_pipeline.domain.envelope import ChangeEvent, EventType
+from switch_pipeline.domain.quarantine import QuarantineReason
 from switch_pipeline.observability import bound_contextvars, get_logger
 from switch_pipeline.quality.rules import LoadedRuleSet, QualityReport
 
@@ -37,13 +38,6 @@ class Outcome(StrEnum):
     STALE = "stale"  # new event, logged; an equal or newer version is already current
     DUPLICATE = "duplicate"  # redelivery of an already logged event; skipped
     QUARANTINED = "quarantined"
-
-
-class QuarantineReason(StrEnum):
-    SCHEMA_VIOLATION = "schema_violation"
-    QUALITY_RULE_FAILED = "quality_rule_failed"
-    EVENT_ID_CONFLICT = "event_id_conflict"
-    SINK_REJECTED = "sink_rejected"
 
 
 class EventProcessor:
