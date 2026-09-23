@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "EventType": {
+      "enum": [
+        "insert",
+        "update"
+      ],
+      "title": "EventType",
+      "type": "string"
+    },
+    "JsonValue": {},
+    "SourceRef": {
+      "additionalProperties": false,
+      "description": "Where the change was captured.",
+      "properties": {
+        "system": {
+          "description": "Source system kind, e.g. 'snowflake'.",
+          "minLength": 1,
+          "title": "System",
+          "type": "string"
+        },
+        "object": {
+          "description": "Fully qualified source object, e.g. 'DB.SCHEMA.TABLE'.",
+          "minLength": 1,
+          "title": "Object",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "object"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One captured row change (envelope schema version 1).",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Envelope version; bumped on any change.",
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "event_id": {
+      "description": "UUIDv5 of (source, entity_type, entity_key, entity_version). Deterministic, so a change re-emitted after a crash keeps its id and is deduplicated downstream.",
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "$ref": "#/$defs/EventType"
+    },
+    "source": {
+      "$ref": "#/$defs/SourceRef"
+    },
+    "entity_type": {
+      "description": "Logical entity, e.g. 'order'.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Entity Type",
+      "type": "string"
+    },
+    "entity_key": {
+      "description": "Business key; Kafka key.",
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Entity Key",
+      "type": "string"
+    },
+    "entity_version": {
+      "description": "Per-entity version; increases on every source write.",
+      "maximum": 9223372036854775807,
+      "minimum": 1,
+      "title": "Entity Version",
+      "type": "integer"
+    },
+    "occurred_at": {
+      "description": "When the change happened at the source (UTC).",
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "captured_at": {
+      "description": "When the adapter read the change (UTC).",
+      "format": "date-time",
+      "title": "Captured At",
+      "type": "string"
+    },
+    "batch_id": {
+      "description": "Adapter batch that captured the change (correlation).",
+      "format": "uuid",
+      "title": "Batch Id",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "description": "The source row, JSON-typed.",
+      "title": "Payload",
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "source",
+    "entity_type",
+    "entity_key",
+    "entity_version",
+    "occurred_at",
+    "captured_at",
+    "batch_id",
+    "payload"
+  ],
+  "title": "ChangeEvent",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://switch.example/schemas/change-event.v1.json"
+}
