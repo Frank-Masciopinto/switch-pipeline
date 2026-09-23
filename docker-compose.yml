@@ -32,7 +32,8 @@ services:
       - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
       - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:${KAFKA_HOST_PORT:?set KAFKA_HOST_PORT in .env}
       # Topics are provisioned explicitly by `init`; a typo must fail, not create a topic.
-      - --set=redpanda.auto_create_topics_enabled=false
+      - --set
+      - redpanda.auto_create_topics_enabled=false
     ports:
       - "${KAFKA_HOST_PORT}:19092"
     volumes:
