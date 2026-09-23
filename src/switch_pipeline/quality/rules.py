@@ -115,7 +115,10 @@ class PatternRule(_Rule):
     @field_validator("regex")
     @classmethod
     def _compiles(cls, regex: str) -> str:
-        re.compile(regex)
+        try:
+            re.compile(regex)
+        except re.error as exc:
+            raise ValueError(f"invalid regular expression: {exc}") from exc
         return regex
 
     def _check(self, value: JsonValue, *, present: bool, event: ChangeEvent) -> str | None:
