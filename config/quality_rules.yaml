@@ -1,0 +1,81 @@
+# =============================================================================
+# Data-quality rules: the single place to add, edit or remove checks.
+#
+# The consumer evaluates these on each event's payload before materializing it.
+#   severity: reject  the event is quarantined (table `quarantine`, GET /quarantine)
+#                     and the entity's current state keeps its last good version.
+#   severity: warn    the event is accepted; the violation is stored on its
+#                     event-log row (`quality_warnings`) and counted in /stats.
+#
+# Checks (null or missing values pass every check except not_null):
+#   not_null               value must be present and non-null
+#   min / max              inclusive numeric bound                (value: <number>)
+#   allowed_values         value must be one of a list            (values: [...])
+#   pattern                string must fully match a regex        (regex: '...')
+#   max_length             maximum string length                  (value: <int>)
+#   matches_entity_key     field must equal the envelope's entity_key
+#   not_after_captured_at  ISO date/timestamp must not be later than capture time
+#
+# Always-on checks that are not configurable here: envelope schema validation,
+# duplicate event ids (identical re-deliveries are skipped and counted,
+# conflicting content under a known id is quarantined) and sink write errors.
+#
+# Rules are pure functions of the event, so replays reach the same verdicts;
+# that is why there is deliberately no "not in the future (wall clock)" check.
+# Payload field names are the source column names in lower case.
+# Apply changes with `make restart-consumer` (the file is mounted, no rebuild).
+# =============================================================================
+version: 1
+
+entities:
+  order:
+    - name: order_key_present
+      description: The business key must be present in the payload.
+      check: not_null
+      field: o_orderkey
+      severity: reject
+
+    - name: order_key_matches_envelope
+      description: The payload key must equal the key the event is partitioned and stored under.
+      check: matches_entity_key
+      field: o_orderkey
+      severity: reject
+
+    - name: customer_key_present
+      description: Every order belongs to a customer.
+      check: not_null
+      field: o_custkey
+      severity: reject
+
+    - name: total_price_present
+      description: Every order must carry a total price.
+      check: not_null
+      field: o_totalprice
+      severity: reject
+
+    - name: total_price_non_negative
+      description: A negative order total is a data-entry error.
+      check: min
+      value: 0
+      field: o_totalprice
+      severity: reject
+
+    - name: order_status_known
+      description: TPC-H order status is O (open), F (fulfilled) or P (partially fulfilled).
+      check: allowed_values
+      values: ["O", "F", "P"]
+      field: o_orderstatus
+      severity: reject
+
+    - name: order_date_not_after_capture
+      description: An order dated after it was captured points at a clock or entry error.
+      check: not_after_captured_at
+      field: o_orderdate
+      severity: warn
+
+    - name: comment_within_source_limit
+      description: TPC-H comments are at most 79 characters.
+      check: max_length
+      value: 79
+      field: o_comment
+      severity: warn
