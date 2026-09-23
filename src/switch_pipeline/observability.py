@@ -38,7 +38,11 @@ def configure_logging(settings: LogSettings, *, service: str, stream: TextIO | N
     ]
     render: list[Processor]
     if settings.format == "json":
-        render = [structlog.processors.dict_tracebacks, structlog.processors.JSONRenderer()]
+        # Frame locals would copy payloads and connection details into the logs.
+        tracebacks = structlog.processors.ExceptionRenderer(
+            structlog.tracebacks.ExceptionDictTransformer(show_locals=False)
+        )
+        render = [tracebacks, structlog.processors.JSONRenderer()]
     else:
         render = [structlog.dev.ConsoleRenderer()]
 
