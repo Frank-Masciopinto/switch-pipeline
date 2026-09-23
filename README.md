@@ -405,7 +405,7 @@ FAIL  source_table  SQL compilation error: Object 'SWITCH_DEMO.RAW.CUSTOMER_ORDE
 
 ## Testing
 
-`make check` runs ruff, `mypy --strict` and pytest (146 unit tests, 49
+`make check` runs ruff, `mypy --strict` and pytest (about 200 unit and
 integration tests) with a 90% coverage gate (currently about 94%). `make audit`
 checks the locked runtime dependencies for known vulnerabilities. CI runs all
 of it on every push and weekly, and Dependabot proposes dependency and action
