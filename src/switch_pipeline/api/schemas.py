@@ -207,4 +207,4 @@ class Stats(BaseModel):
     watermarks: list[Watermark]
     recent_batches: list[BatchSummary]
     consumer_lag: ConsumerLag
-    checksums: SinkChecksums
+    checksums: SinkChecksums | None = Field(description="Only with ?checksums=true.")

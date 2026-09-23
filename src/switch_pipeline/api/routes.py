@@ -187,9 +187,18 @@ def build_router(settings: ApiSettings) -> APIRouter:
         )
 
     @router.get("/stats", response_model=Stats, tags=["stats"], summary="Pipeline observability")
-    async def stats(pool: Pool, lag_inspector: LagInspector) -> Stats:
+    async def stats(
+        pool: Pool,
+        lag_inspector: LagInspector,
+        checksums: Annotated[
+            bool,
+            Query(description="Include convergence checksums (scans the sink; for verification)."),
+        ] = False,
+    ) -> Stats:
         async with pool.connection() as conn:
-            data = await queries.sink_stats(conn, lag_sample_size=settings.lag_sample_size)
+            data = await queries.sink_stats(
+                conn, lag_sample_size=settings.lag_sample_size, include_checksums=checksums
+            )
         consumer_lag = await run_in_threadpool(lag_inspector.snapshot)
         totals, lag = data["totals"], data["lag"]
         return Stats(
@@ -216,7 +225,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             watermarks=[Watermark(**row) for row in data["watermarks"]],
             recent_batches=[BatchSummary(**row) for row in data["batches"]],
             consumer_lag=consumer_lag,
-            checksums=SinkChecksums(**data["checksums"]),
+            checksums=SinkChecksums(**data["checksums"]) if data["checksums"] else None,
         )
 
     return router

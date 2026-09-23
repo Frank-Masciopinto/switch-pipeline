@@ -189,7 +189,9 @@ async def list_quarantine(
     return _page(rows, limit, "quarantine_seq")
 
 
-async def sink_stats(conn: AsyncConnection[Any], *, lag_sample_size: int) -> dict[str, Any]:
+async def sink_stats(
+    conn: AsyncConnection[Any], *, lag_sample_size: int, include_checksums: bool
+) -> dict[str, Any]:
     by_type = await _fetch(
         conn, sql.SQL("SELECT event_type, count(*) AS n FROM event_log GROUP BY event_type")
     )
@@ -223,7 +225,7 @@ async def sink_stats(conn: AsyncConnection[Any], *, lag_sample_size: int) -> dic
             "error FROM sync_batch ORDER BY started_at DESC LIMIT 5"
         ),
     )
-    checksums = await _fetch(conn, sql.SQL(SINK_CHECKSUMS))
+    checksums = await _fetch(conn, sql.SQL(SINK_CHECKSUMS)) if include_checksums else [None]
     return {
         "by_type": {row["event_type"]: row["n"] for row in by_type},
         "by_reason": {row["reason"]: row["n"] for row in by_reason},

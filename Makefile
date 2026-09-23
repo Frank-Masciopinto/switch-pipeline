@@ -70,8 +70,8 @@ restart-consumer: ## Restart the consumer, e.g. after editing config/quality_rul
 check-config: .env ## Validate .env and the quality rules file
 	$(TOOLS) check-config
 
-stats: ## GET /stats
-	@curl -fsS "$(API_URL)/stats" | python3 -m json.tool
+stats: ## GET /stats (with convergence checksums)
+	@curl -fsS "$(API_URL)/stats?checksums=true" | python3 -m json.tool
 
 events: ## GET /events (10 most recent)
 	@curl -fsS "$(API_URL)/events?limit=10" | python3 -m json.tool
