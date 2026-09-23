@@ -83,6 +83,7 @@ services:
   adapter:
     <<: *app
     command: ["adapter"]
+    stop_grace_period: ${WORKER_STOP_GRACE_SECONDS:?set WORKER_STOP_GRACE_SECONDS in .env}s
     depends_on:
       init:
         condition: service_completed_successfully
@@ -96,6 +97,7 @@ services:
   consumer:
     <<: *app
     command: ["consumer"]
+    stop_grace_period: ${WORKER_STOP_GRACE_SECONDS}s
     depends_on:
       init:
         condition: service_completed_successfully
