@@ -5,6 +5,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from switch_pipeline.adapter.cursor import SyncCursor
 from switch_pipeline.adapter.state import PostgresSyncStateStore, SyncMode
@@ -150,6 +151,24 @@ def test_stats_report_counts_lag_watermark_and_checksums(client: TestClient, db:
 )
 def test_invalid_requests_are_rejected(client: TestClient, path: str, status: int) -> None:
     assert client.get(path).status_code == status
+
+
+def test_data_endpoints_require_the_bearer_token_when_one_is_configured(
+    db: str, postgres_settings: PostgresSettings, kafka_settings: KafkaSettings
+) -> None:
+    token = "a-long-enough-test-token"
+    secured = API.model_copy(update={"auth_token": SecretStr(token)})
+    app = create_app(postgres=postgres_settings, api=secured, kafka=kafka_settings)
+    with TestClient(app) as client:
+        denied = client.get("/events")
+        assert (denied.status_code, denied.headers["www-authenticate"]) == (401, "Bearer")
+        wrong = {"Authorization": "Bearer not-the-right-token"}
+        assert client.get("/stats", headers=wrong).status_code == 401
+        right = {"Authorization": f"Bearer {token}"}
+        assert client.get("/events", headers=right).status_code == 200
+        assert client.get("/quarantine", headers=right).status_code == 200
+        assert client.get("/healthz").status_code == 200, "probes stay open"
+        assert client.get("/readyz").status_code == 200
 
 
 def test_health_endpoints_and_request_ids(client: TestClient) -> None:

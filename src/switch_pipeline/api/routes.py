@@ -1,12 +1,15 @@
 """HTTP endpoints. Limits and defaults come from ApiSettings (i.e. from .env)."""
 
+import secrets
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from psycopg_pool import AsyncConnectionPool
-from pydantic import AwareDatetime
+from pydantic import AwareDatetime, SecretStr
 from starlette.concurrency import run_in_threadpool
 
 from switch_pipeline.api import queries
@@ -47,8 +50,29 @@ Pool = Annotated[AsyncConnectionPool, Depends(get_pool)]
 LagInspector = Annotated[ConsumerLagInspector, Depends(get_lag_inspector)]
 
 
+_bearer = HTTPBearer(auto_error=False)
+
+
+def require_token(expected: SecretStr) -> Callable[..., Awaitable[None]]:
+    async def check(
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    ) -> None:
+        token = credentials.credentials if credentials else ""
+        if not secrets.compare_digest(token.encode(), expected.get_secret_value().encode()):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "missing or invalid bearer token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    return check
+
+
 def build_router(settings: ApiSettings) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter()  # health probes: always open
+    protected = APIRouter(  # payloads: behind the token when API_AUTH_TOKEN is set
+        dependencies=[Depends(require_token(settings.auth_token))] if settings.auth_token else []
+    )
     PageSize = Annotated[int, Query(ge=1, le=settings.page_size_max)]  # noqa: N806
 
     @router.get("/healthz", tags=["ops"], summary="Liveness")
@@ -65,7 +89,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             return {"status": "unavailable"}
         return {"status": "ready"}
 
-    @router.get("/events", response_model=EventPage, tags=["events"], summary="Streamed events")
+    @protected.get("/events", response_model=EventPage, tags=["events"], summary="Streamed events")
     async def list_events(
         pool: Pool,
         entity_key: Annotated[str | None, Query(max_length=512)] = None,
@@ -107,7 +131,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             next_cursor=None if next_before is None else queries.encode_cursor(next_before),
         )
 
-    @router.get("/events/{event_id}", response_model=EventRecord, tags=["events"])
+    @protected.get("/events/{event_id}", response_model=EventRecord, tags=["events"])
     async def get_event(pool: Pool, event_id: UUID) -> EventRecord:
         async with pool.connection() as conn:
             row = await queries.get_event(conn, event_id)
@@ -115,7 +139,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
         return EventRecord.from_row(row)
 
-    @router.get(
+    @protected.get(
         "/entities/{key}",
         response_model=EntityView,
         tags=["entities"],
@@ -160,7 +184,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             quarantined=[QuarantineRecord.from_row(row) for row in quarantined],
         )
 
-    @router.get(
+    @protected.get(
         "/quarantine",
         response_model=QuarantinePage,
         tags=["quality"],
@@ -186,7 +210,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             next_cursor=None if next_before is None else queries.encode_cursor(next_before),
         )
 
-    @router.get("/stats", response_model=Stats, tags=["stats"], summary="Pipeline observability")
+    @protected.get("/stats", response_model=Stats, tags=["stats"], summary="Pipeline observability")
     async def stats(
         pool: Pool,
         lag_inspector: LagInspector,
@@ -228,6 +252,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             checksums=SinkChecksums(**data["checksums"]) if data["checksums"] else None,
         )
 
+    router.include_router(protected)
     return router
 
 

@@ -266,7 +266,11 @@ make rebuild   mode rebuild    replayed 20059  {applied: 20050, duplicate: 1, qu
 | `GET /healthz`, `GET /readyz` | Liveness; readiness (database reachable). |
 
 The API's database sessions run with `default_transaction_read_only=on`, so it
-cannot write to the sink even by mistake.
+cannot write to the sink even by mistake. Set `API_AUTH_TOKEN` and every
+endpoint except the health probes requires `Authorization: Bearer <token>`
+(constant-time comparison, `401` otherwise). `make stats`, `make events`,
+`make quarantine` and `make demo` send it automatically; the API logs a warning
+at startup while auth is disabled.
 
 ### Data quality and failure routing
 
@@ -344,6 +348,12 @@ created by [`snowflake/setup.sql`](snowflake/setup.sql). The private key is
 mounted read-only at `/run/secrets` (on Linux hosts, `chown 10001` the key file
 for the container user). `SNOWFLAKE_PASSWORD` accepts a password or a
 programmatic access token instead. Containers run as a non-root user.
+
+In docker compose every service reads the same `.env`, so per-service database
+roles would only guard against bugs (the API's read-only sessions already do
+that), not against a compromised container reading its neighbours'
+passwords. Production distributes credentials per service from a secret
+manager, and that is where separate roles belong.
 
 ## Operations
 

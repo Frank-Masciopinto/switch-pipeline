@@ -8,6 +8,7 @@ UV ?= uv
 # Only used to print/curl the API URL; every setting still lives in .env.
 -include .env
 API_URL := http://localhost:$(API_HOST_PORT)
+API_AUTH := $(if $(API_AUTH_TOKEN),-H "Authorization: Bearer $(API_AUTH_TOKEN)")
 
 .PHONY: help env up down reset ps logs trace seed simulate inject-bad-events replay rebuild \
         restart-consumer check-config check-snowflake stats events quarantine \
@@ -75,13 +76,13 @@ check-snowflake: .env ## Check the Snowflake key, sign-in, grants and objects
 	$(TOOLS) check-snowflake
 
 stats: ## GET /stats (with convergence checksums)
-	@curl -fsS "$(API_URL)/stats?checksums=true" | python3 -m json.tool
+	@curl -fsS $(API_AUTH) "$(API_URL)/stats?checksums=true" | python3 -m json.tool
 
 events: ## GET /events (10 most recent)
-	@curl -fsS "$(API_URL)/events?limit=10" | python3 -m json.tool
+	@curl -fsS $(API_AUTH) "$(API_URL)/events?limit=10" | python3 -m json.tool
 
 quarantine: ## GET /quarantine
-	@curl -fsS "$(API_URL)/quarantine" | python3 -m json.tool
+	@curl -fsS $(API_AUTH) "$(API_URL)/quarantine" | python3 -m json.tool
 
 snowflake-keypair: ## Create secrets/snowflake_rsa_key.p8 (+ .pub) for key-pair auth
 	@test ! -e secrets/snowflake_rsa_key.p8 || { echo "secrets/snowflake_rsa_key.p8 exists"; exit 1; }

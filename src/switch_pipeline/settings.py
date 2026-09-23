@@ -146,6 +146,8 @@ class ApiSettings(_EnvSettings):
     page_size_max: PositiveInt
     entity_history_limit: PositiveInt
     lag_sample_size: PositiveInt
+    # Optional: when set, every data endpoint requires "Authorization: Bearer <token>".
+    auth_token: SecretStr | None = Field(default=None, min_length=16)
 
     @model_validator(mode="after")
     def _default_page_fits(self) -> "ApiSettings":

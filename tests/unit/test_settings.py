@@ -103,6 +103,20 @@ def test_snowflake_needs_exactly_one_authentication_method(
     assert load_settings(SnowflakeSettings).password is not None
 
 
+def test_an_api_token_must_be_long_enough(
+    isolated_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name, value in read_env_example().items():
+        if name.startswith("API_") and value:
+            monkeypatch.setenv(name, value)
+    assert load_settings(ApiSettings).auth_token is None, "empty means disabled"
+    monkeypatch.setenv("API_AUTH_TOKEN", "short")
+    with pytest.raises(ConfigurationError, match="API_AUTH_TOKEN"):
+        load_settings(ApiSettings)
+    monkeypatch.setenv("API_AUTH_TOKEN", "x" * 32)
+    assert load_settings(ApiSettings).auth_token is not None
+
+
 def test_api_connections_are_read_only(isolated_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for name, value in read_env_example().items():
         if name.startswith("POSTGRES_"):

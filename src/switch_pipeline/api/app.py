@@ -41,7 +41,9 @@ def create_app(*, postgres: PostgresSettings, api: ApiSettings, kafka: KafkaSett
         inspector = ConsumerLagInspector(kafka)
         app.state.pool = pool
         app.state.lag_inspector = inspector
-        log.info("api_started", port=api.port)
+        log.info("api_started", port=api.port, auth="bearer" if api.auth_token else "none")
+        if api.auth_token is None:
+            log.warning("api_auth_disabled", hint="set API_AUTH_TOKEN outside local development")
         try:
             yield
         finally:

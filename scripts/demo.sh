@@ -9,13 +9,17 @@ cd "$(dirname "$0")/.."
 [[ -f .env ]] || { echo "Missing .env: run 'make env' and configure Snowflake first."; exit 1; }
 api_port=$(grep -E '^API_HOST_PORT=' .env | tail -n 1 | cut -d= -f2)
 API="http://localhost:${api_port}"
+token=$(grep -E '^API_AUTH_TOKEN=' .env | tail -n 1 | cut -d= -f2-)
 
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 pause() { if [[ -t 0 ]]; then read -rp "    press enter to continue "; fi; }
 json() { python3 -c "import json, sys; data = json.load(sys.stdin); $1"; }
+api() {  # GET an API path, with the bearer token when API_AUTH_TOKEN is set
+  if [[ -n "$token" ]]; then curl -fsS -H "Authorization: Bearer $token" "$API$1"; else curl -fsS "$API$1"; fi
+}
 
 stats_line() {
-  curl -fsS "$API/stats" | json '
+  api "/stats" | json '
 e = data["events"]; w = (data["watermarks"] or [{}])[0]
 print("    events=%s by_type=%s entities=%s quarantined=%s duplicates_skipped=%s consumer_lag=%s"
       % (e["total"], e["by_type"], data["entities"], data["quarantine"]["total"],
@@ -24,7 +28,7 @@ print("    watermark=(%s, %s)" % (w.get("cursor_updated_at"), w.get("cursor_key"
 }
 
 entities() {
-  curl -fsS "$API/stats" 2>/dev/null | json 'print(data["entities"])' 2>/dev/null || echo 0
+  api "/stats" 2>/dev/null | json 'print(data["entities"])' 2>/dev/null || echo 0
 }
 
 wait_for_entities() {
@@ -72,7 +76,7 @@ wait_for_entities "$((baseline + accepted))"
 pause
 
 step "4. GET /events: the newest change events, with Kafka coordinates and lag"
-curl -fsS "$API/events?limit=3" | json '
+api "/events?limit=3" | json '
 for e in data["items"]:
     print("    %-6s key=%6s v%s batch=%s partition=%s offset=%s lag=%.1fs"
           % (e["event_type"], e["entity_key"], e["entity_version"], e["batch_id"],
@@ -81,13 +85,13 @@ pause
 
 step "5. GET /entities/{key} for the rejected update: state keeps the last good version"
 key=$(echo "$changes" | json 'print(next(i["key"] for i in data["invalid"] if i["kind"] == "unknown_order_status"))')
-curl -fsS "$API/entities/$key" | json '
+api "/entities/$key" | json '
 print("    current version:", data["current"]["entity_version"], "status:", data["current"]["payload"]["o_orderstatus"])
 print("    quarantined:", [(q["reason"], [v["rule"] for v in q["details"]["violations"]]) for q in data["quarantined"]])'
 pause
 
 step "6. GET /stats: counts by type, lag, watermark, consumer lag, checksums"
-curl -fsS "$API/stats?checksums=true" | python3 -m json.tool | head -n 60
+api "/stats?checksums=true" | python3 -m json.tool | head -n 60
 pause
 
 step "7. Replay the topic from offset 0 over the live sink: nothing changes"
