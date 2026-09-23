@@ -388,8 +388,11 @@ FAIL  source_table  SQL compilation error: Object 'SWITCH_DEMO.RAW.CUSTOMER_ORDE
 
 ## Testing
 
-`make check` runs ruff, `mypy --strict` and pytest: 121 unit tests and 39
-integration tests.
+`make check` runs ruff, `mypy --strict` and pytest (146 unit tests, 49
+integration tests) with a 90% coverage gate (currently about 94%). `make audit`
+checks the locked runtime dependencies for known vulnerabilities. CI runs all
+of it on every push and weekly, and Dependabot proposes dependency and action
+updates.
 
 - **Unit** (no Docker): watermark ordering and keyset query construction,
   envelope validation and deterministic ids, every quality check, row-to-event
@@ -405,7 +408,9 @@ integration tests.
   (restart, failed and interrupted batches, the single-writer lock, append-only
   trigger, migration checksums), the adapter's Snowflake SQL through the real
   connector against fakesnow, the full pipeline end to end including a rebuild
-  from offset 0, a broker outage, and the API.
+  from offset 0, a broker outage, the live consumer loop and its shutdown, the
+  replay and injection tools, the API, and the CLI entry points configured
+  purely from environment variables, as the containers run them.
 
 The idempotency guarantees live in SQL (`ON CONFLICT` and the version guard),
 so those tests run against PostgreSQL rather than a mock of it. fakesnow is a

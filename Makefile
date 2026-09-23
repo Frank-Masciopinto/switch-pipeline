@@ -12,7 +12,7 @@ API_URL := http://localhost:$(API_HOST_PORT)
 .PHONY: help env up down reset ps logs trace seed simulate inject-bad-events replay rebuild \
         restart-consumer check-config check-snowflake stats events quarantine \
         snowflake-keypair demo \
-        install lint fmt typecheck test test-unit test-integration check schema
+        install lint fmt typecheck test test-unit test-integration coverage audit check schema
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -121,7 +121,16 @@ test-integration: ## Integration tests (Docker: Postgres, Redpanda; Snowflake em
 test: ## All tests
 	$(UV) run pytest
 
-check: lint typecheck test ## Everything CI runs
+coverage: ## All tests with the coverage report and the 90% gate
+	$(UV) run pytest --cov --cov-report=term
+
+audit: ## Known vulnerabilities in the runtime dependencies
+	@requirements=$$(mktemp); \
+	$(UV) export --frozen --no-dev --no-emit-project --format requirements-txt > "$$requirements" \
+		&& uvx pip-audit@2.10.1 --strict --disable-pip -r "$$requirements"; \
+	status=$$?; rm -f "$$requirements"; exit $$status
+
+check: lint typecheck coverage ## Everything CI runs (plus `make audit`)
 
 schema: ## Regenerate schemas/change_event.v1.schema.json
 	$(UV) run switch-pipeline export-schema
