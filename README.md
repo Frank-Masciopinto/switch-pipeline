@@ -31,6 +31,7 @@ current state per entity, the rejected records and pipeline statistics.
 - [Troubleshooting](#troubleshooting)
 - [Testing](#testing)
 - [Design decisions and trade-offs](#design-decisions-and-trade-offs)
+- [Throughput](#throughput)
 - [Exactly-once effect: the failure windows that remain](#exactly-once-effect-the-failure-windows-that-remain)
 - [Scope cuts](#scope-cuts)
 - [What I would do with more time](#what-i-would-do-with-more-time)
@@ -347,7 +348,13 @@ the pipeline uses key-pair (JWT) authentication as a `TYPE = SERVICE` user,
 created by [`snowflake/setup.sql`](snowflake/setup.sql). The private key is
 mounted read-only at `/run/secrets` (on Linux hosts, `chown 10001` the key file
 for the container user). `SNOWFLAKE_PASSWORD` accepts a password or a
-programmatic access token instead. Containers run as a non-root user.
+programmatic access token instead.
+
+**Containers** run as a non-root user (uid 10001) with a read-only root
+filesystem, every Linux capability dropped and `no-new-privileges`. A minimal
+init is PID 1, so SIGTERM always reaches the application (PID 1 itself ignores
+signals it has no handler for), and the workers get `WORKER_STOP_GRACE_SECONDS`
+to finish the batch in flight.
 
 In docker compose every service reads the same `.env`, so per-service database
 roles would only guard against bugs (the API's read-only sessions already do
@@ -454,6 +461,25 @@ the sample share, key-pair auth) is plain configuration.
 - **One image, many commands, and crash-only workers.** Every error either
   retries with backoff or exits for the orchestrator to restart; because state
   only moves after a durable write, a crash is always safe.
+
+## Throughput
+
+Measured on a laptop (Docker Desktop, 8 cores) with the emulator as the source:
+
+| Stage | Measured | Notes |
+| --- | --- | --- |
+| Adapter: read, map, publish with `acks=all` | ~14,700 rows/s | 22,000 changed rows in 11 batches in 1.4 s. Against real Snowflake each batch query costs a network round trip and warehouse time, so `ADAPTER_BATCH_SIZE` is the lever. |
+| Consumer: new events | ~2,400 events/s per instance | Median 206 ms per 500-record transaction. |
+| Consumer: redeliveries (replay) | ~15,000 events/s | 42,050 duplicates in 2.7 s; deduplication is one lookup per batch. |
+| Rebuild from offset 0 | 42,053 records in 19 s | Same code path as new events. |
+
+The consumer's cost is per-record round trips (a savepoint, the event-log
+insert and the upsert for each record); the savepoint is what keeps one
+unstorable record from failing its batch. The first lever is scaling out, one
+consumer per partition (6 today). The next is a batched fast path: one
+multi-row insert and one set-based upsert per batch, falling back to
+per-record savepoints only when a batch hits a data error. My estimate is 5 to
+10 times the throughput, with the same idempotency guarantees.
 
 ## Exactly-once effect: the failure windows that remain
 
