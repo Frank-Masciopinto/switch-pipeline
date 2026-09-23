@@ -10,7 +10,8 @@ UV ?= uv
 API_URL := http://localhost:$(API_HOST_PORT)
 
 .PHONY: help env up down reset ps logs trace seed simulate inject-bad-events replay rebuild \
-        restart-consumer check-config stats events quarantine snowflake-keypair demo \
+        restart-consumer check-config check-snowflake stats events quarantine \
+        snowflake-keypair demo \
         install lint fmt typecheck test test-unit test-integration check schema
 
 help: ## List the available targets
@@ -69,6 +70,9 @@ restart-consumer: ## Restart the consumer, e.g. after editing config/quality_rul
 
 check-config: .env ## Validate .env and the quality rules file
 	$(TOOLS) check-config
+
+check-snowflake: .env ## Check the Snowflake key, sign-in, grants and objects
+	$(TOOLS) check-snowflake
 
 stats: ## GET /stats (with convergence checksums)
 	@curl -fsS "$(API_URL)/stats?checksums=true" | python3 -m json.tool

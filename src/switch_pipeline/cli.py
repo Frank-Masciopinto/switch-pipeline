@@ -31,6 +31,7 @@ from switch_pipeline.settings import (
     SourceSettings,
     load_settings,
 )
+from switch_pipeline.tools.check import check_snowflake
 from switch_pipeline.tools.inject import inject_bad_events
 from switch_pipeline.tools.replay import replay_topic
 from switch_pipeline.tools.seed import seed_source
@@ -91,6 +92,11 @@ def _parser() -> argparse.ArgumentParser:
     schema = command("export-schema", _export_schema, "Write the envelope JSON Schema.")
     schema.add_argument("--output", type=Path, default=DEFAULT_SCHEMA_PATH)
     command("check-config", _check_config, "Validate .env and the quality rules file.")
+    command(
+        "check-snowflake",
+        _check_snowflake,
+        "Check the Snowflake key, sign-in, grants and objects before seeding.",
+    )
     return parser
 
 
@@ -203,3 +209,15 @@ def _check_config(_: argparse.Namespace) -> int:
     return _report(
         {"settings": "ok", "quality_rules": {"fingerprint": rules.fingerprint, **rules.summary()}}
     )
+
+
+def _check_snowflake(_: argparse.Namespace) -> int:
+    snowflake, source = load_settings(SnowflakeSettings), load_settings(SourceSettings)
+    seed = load_settings(SeedSettings)
+    _tool_logging("check-snowflake")
+    results = check_snowflake(snowflake, source, seed)
+    for result in results:
+        print(f"{'ok  ' if result.ok else 'FAIL'}  {result.name:<13} {result.detail}")
+        if result.hint:
+            print(f"      {'':<13} hint: {result.hint}")
+    return 0 if all(result.ok for result in results) else 1

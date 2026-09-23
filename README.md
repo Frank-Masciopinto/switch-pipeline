@@ -28,6 +28,7 @@ current state per entity, the rejected records and pipeline statistics.
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
 - [Operations](#operations)
+- [Troubleshooting](#troubleshooting)
 - [Testing](#testing)
 - [Design decisions and trade-offs](#design-decisions-and-trade-offs)
 - [Exactly-once effect: the failure windows that remain](#exactly-once-effect-the-failure-windows-that-remain)
@@ -55,6 +56,8 @@ make simulate            # inserts, updates and a few invalid rows in Snowflake
 Then look around with `make stats`, `make events` and `make quarantine`, and
 prove idempotency with `make replay` and `make rebuild`. `make demo` runs the
 whole walkthrough used for the screen recording (start from `make reset`).
+If anything on the Snowflake side fails, `make check-snowflake` says which part
+and how to fix it (see [Troubleshooting](#troubleshooting)).
 
 **Without a Snowflake account:** uncomment the emulator block at the end of
 `.env` and run the same commands. The stack then starts
@@ -356,8 +359,32 @@ programmatic access token instead. Containers run as a non-root user.
 | `make trace ID=...` | Follow a batch or event id through the logs |
 | `make restart-consumer` | Apply edited quality rules |
 | `make check-config` | Validate `.env` and the rules file |
+| `make check-snowflake` | Check the key, sign-in, grants, source table and sample share |
 | `make check` | Lint, type-check and all tests (what CI runs) |
 | `COMPOSE_PROFILES=ui` in `.env` | Adds Redpanda Console on `REDPANDA_CONSOLE_HOST_PORT` |
+
+## Troubleshooting
+
+`make check-snowflake` walks through what the first sync needs and prints the
+likely fix for the first thing that fails:
+
+```text
+ok    private_key   /run/secrets/snowflake_rsa_key.p8 is readable
+ok    sign_in       signed in to myorg-myaccount with a key pair
+ok    database      SWITCH_DEMO is visible to the role
+FAIL  source_table  SQL compilation error: Object 'SWITCH_DEMO.RAW.CUSTOMER_ORDERS' does not exist or not authorized.
+                    hint: run `make seed`, which creates the table; otherwise check the role's grants
+```
+
+| Symptom | Fix |
+| --- | --- |
+| `JWT token is invalid` | The public key on the user does not match the private key: rerun the `CREATE USER ... RSA_PUBLIC_KEY` step of `snowflake/setup.sql` with the key printed by `make snowflake-keypair` (or `ALTER USER SWITCH_PIPELINE SET RSA_PUBLIC_KEY = '...'`). |
+| `Failed to connect` / `404` at sign-in | `SNOWFLAKE_ACCOUNT` must be `<orgname>-<account_name>`; the last query of `setup.sql` prints it. |
+| `Incorrect username or password` / MFA required | Service users cannot use passwords; use the key pair, or put a programmatic access token in `SNOWFLAKE_PASSWORD`. |
+| Key file unreadable on a Linux host | The container runs as uid 10001: `sudo chown 10001 secrets/snowflake_rsa_key.p8`. |
+| Adapter logs `source_unavailable` | Expected until `make seed` has created the table; the adapter retries with backoff and starts syncing on its own. |
+| `make replay` waits on `waiting_for_idle_consumer_group` | A consumer that was stopped mid-join stays listed until the broker evicts it (up to 45 s); the tool waits for it. |
+| Ports already in use | Change `API_HOST_PORT`, `POSTGRES_HOST_PORT` or `KAFKA_HOST_PORT` in `.env`. |
 
 ## Testing
 
