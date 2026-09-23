@@ -5,6 +5,7 @@ snapshotted once, the group first catches up to them, the "before" checksums
 are taken, then the replay runs from offset 0 up to the same offsets.
 """
 
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -25,6 +26,10 @@ from switch_pipeline.settings import ConsumerSettings, KafkaSettings, PostgresSe
 log = get_logger(__name__)
 
 _COMPARED = ("state_checksum", "event_log_checksum", "quarantine_checksum")
+
+# Longer than librdkafka's default session.timeout.ms (45 s), after which the
+# broker evicts a member that disappeared without leaving the group.
+_GROUP_EVICTION_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,14 +53,8 @@ def replay_topic(
     rebuild: bool,
     force: bool,
 ) -> ReplayReport:
-    members = TopicAdmin(kafka, client_id="switch-replay-admin").active_members(
-        kafka.consumer_group
-    )
-    if members and not force:
-        raise FatalPipelineError(
-            f"consumer group {kafka.consumer_group!r} has {members} active member(s); "
-            "stop the consumer first (`make replay` does this)"
-        )
+    if not force:
+        _wait_for_idle_group(TopicAdmin(kafka, client_id="switch-replay-admin"), kafka)
     pool = open_sink_pool(postgres, application_name="switch-replay")
     try:
         runner = ConsumerRunner(
@@ -87,6 +86,22 @@ def replay_topic(
         after=after,
         converged=converged,
     )
+
+
+def _wait_for_idle_group(admin: TopicAdmin, kafka: KafkaSettings) -> None:
+    """Replay assigns partitions manually, which is only safe with no live member.
+
+    A consumer stopped mid-join may stay listed until the broker evicts it.
+    """
+    deadline = time.monotonic() + _GROUP_EVICTION_SECONDS
+    while members := admin.active_members(kafka.consumer_group):
+        if time.monotonic() >= deadline:
+            raise FatalPipelineError(
+                f"consumer group {kafka.consumer_group!r} still has {members} active member(s); "
+                "stop the consumer first (`make replay` does this)"
+            )
+        log.info("waiting_for_idle_consumer_group", group=kafka.consumer_group, members=members)
+        time.sleep(2)
 
 
 def _checksums(pool: ConnectionPool) -> dict[str, Any]:
