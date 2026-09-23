@@ -165,12 +165,15 @@ class PostgresSyncStateStore:
                 raise FatalPipelineError(f"batch {batch_id} is not running; refusing to commit it")
             conn.execute(
                 """
-                UPDATE sync_state
-                SET cursor_updated_at = %s, cursor_key = %s, last_batch_id = %s,
+                INSERT INTO sync_state (source_id, cursor_updated_at, cursor_key, last_batch_id)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (source_id) DO UPDATE SET
+                    cursor_updated_at = EXCLUDED.cursor_updated_at,
+                    cursor_key = EXCLUDED.cursor_key,
+                    last_batch_id = EXCLUDED.last_batch_id,
                     updated_at = clock_timestamp()
-                WHERE source_id = %s
                 """,
-                (cursor_end.updated_at, Jsonb(cursor_end.key), batch_id, source_id),
+                (source_id, cursor_end.updated_at, Jsonb(cursor_end.key), batch_id),
             )
 
     def fail_batch(self, *, batch_id: UUID, error: str) -> None:
@@ -187,8 +190,11 @@ class PostgresSyncStateStore:
         with self._pool.connection() as conn, conn.transaction():
             conn.execute(
                 """
-                UPDATE sync_state SET initial_sync_completed_at = clock_timestamp()
-                WHERE source_id = %s AND initial_sync_completed_at IS NULL
+                INSERT INTO sync_state (source_id, initial_sync_completed_at)
+                VALUES (%s, clock_timestamp())
+                ON CONFLICT (source_id) DO UPDATE
+                SET initial_sync_completed_at = clock_timestamp(), updated_at = clock_timestamp()
+                WHERE sync_state.initial_sync_completed_at IS NULL
                 """,
                 (source_id,),
             )
