@@ -107,7 +107,7 @@ class SyncService:
         heartbeat: Heartbeat,
     ) -> None:
         consecutive_failures = 0
-        while not shutdown.requested:
+        while not shutdown.requested():
             heartbeat.beat()
             try:
                 result = self.run_cycle()
@@ -118,7 +118,7 @@ class SyncService:
                 delay = backoff.delay(consecutive_failures)
                 log.warning("source_unavailable", error=str(exc), retry_in_seconds=round(delay, 2))
             except Exception:
-                if shutdown.requested:  # e.g. a retry wait cut short by SIGTERM
+                if shutdown.requested():  # e.g. a retry wait cut short by SIGTERM
                     log.info("sync_cycle_interrupted_by_shutdown")
                     return
                 consecutive_failures += 1

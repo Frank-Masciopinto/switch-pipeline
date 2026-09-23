@@ -76,7 +76,7 @@ class ConsumerRunner:
         )
         log.info("consumer_started", topic=self._kafka.topic, group=self._kafka.consumer_group)
         try:
-            while not self._shutdown.requested:
+            while not self._shutdown.requested():
                 self._heartbeat.beat()
                 self._consume_batch(consumer)
         finally:
@@ -120,7 +120,7 @@ class ConsumerRunner:
             start = OFFSET_BEGINNING if from_beginning else OFFSET_STORED
             consumer.assign([TopicPartition(self._kafka.topic, p, start) for p in partitions])
             totals: Counter[Outcome] = Counter()
-            while pending and not self._shutdown.requested:
+            while pending and not self._shutdown.requested():
                 self._heartbeat.beat()
                 totals.update(self._consume_batch(consumer, bounds=end_offsets))
                 positions = consumer.position(
@@ -174,7 +174,7 @@ class ConsumerRunner:
                 with self._pool.connection() as conn, conn.transaction():
                     return self._processor.process_batch(conn, messages)
             except (psycopg.OperationalError, PoolTimeout) as exc:
-                if attempt >= self._settings.db_max_attempts or self._shutdown.requested:
+                if attempt >= self._settings.db_max_attempts or self._shutdown.requested():
                     raise
                 delay = self._backoff.delay(attempt)
                 log.warning(

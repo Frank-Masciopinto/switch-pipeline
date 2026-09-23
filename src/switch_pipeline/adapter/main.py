@@ -69,7 +69,7 @@ def run_adapter(*, once: bool) -> int:
                 batch_size=adapter.batch_size,
                 settle_seconds=adapter.settle_seconds,
                 guard=lock,
-                stop_requested=lambda: shutdown.requested,
+                stop_requested=shutdown.requested,
                 on_progress=heartbeat.beat,
             )
             log.info(

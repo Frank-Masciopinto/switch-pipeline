@@ -30,8 +30,9 @@ class Shutdown:
     def request(self) -> None:
         self._event.set()
 
-    @property
     def requested(self) -> bool:
+        # A method, not a property: the flag flips asynchronously (signal
+        # handler), so repeated checks must not be treated as one stable value.
         return self._event.is_set()
 
     def sleep(self, seconds: float) -> bool:
@@ -60,4 +61,4 @@ def idle(seconds: float, *, shutdown: Shutdown, heartbeat: Heartbeat) -> bool:
             return True
         remaining -= step
     heartbeat.beat()
-    return shutdown.requested
+    return shutdown.requested()
