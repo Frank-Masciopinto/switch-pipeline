@@ -1,0 +1,15 @@
+.git
+.github
+.env
+secrets
+.venv
+tests
+schemas
+snowflake
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+Makefile
+docker-compose.yml
+Dockerfile

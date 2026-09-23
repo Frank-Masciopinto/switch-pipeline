@@ -1,0 +1,85 @@
+[project]
+name = "switch-pipeline"
+version = "1.0.0"
+description = "Snowflake -> Redpanda -> PostgreSQL change-data pipeline with an event-inspection API"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "confluent-kafka>=2.15.1,<3",
+    "fastapi>=0.141.1,<1",
+    "psycopg[binary]>=3.3.6,<4",
+    "psycopg-pool>=3.3.3,<4",
+    "pydantic>=2.13.5,<3",
+    "pydantic-settings>=2.15.0,<3",
+    "pyyaml>=6.0.3,<7",
+    "snowflake-connector-python>=4.7.5,<5",
+    "structlog>=26.1.0",
+    "uvicorn>=0.53.0,<1",
+]
+
+[project.scripts]
+switch-pipeline = "switch_pipeline.cli:main"
+
+[dependency-groups]
+dev = [
+    "fakesnow[server]==0.11.18",
+    "httpx2>=2.13.1",
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.16.8",
+    "testcontainers[postgres]>=4.15.0",
+    "types-pyyaml>=6.0.12",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "B", "UP", "SIM", "RUF", "S", "N", "PT", "C4", "DTZ", "T20",
+    "PLE", "PLW", "PERF", "TRY", "RET", "PIE", "LOG", "G",
+]
+ignore = [
+    "TRY003",  # exception messages carry the context an operator needs
+    "S101",    # assert is used in tests
+    "G004",    # structlog event names are static; f-strings only appear in messages
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PLW", "TRY", "DTZ001"]
+"src/switch_pipeline/cli.py" = ["T20"]
+"src/switch_pipeline/healthcheck.py" = ["T20", "S310"]
+"src/switch_pipeline/tools/**" = ["T20"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["snowflake.*", "fakesnow.*", "testcontainers.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = ["integration: needs Docker (Postgres, Redpanda) via testcontainers"]
+timeout = 300
+filterwarnings = [
+    "ignore::DeprecationWarning:snowflake.*",
+    "ignore::UserWarning:snowflake.*",
+]
