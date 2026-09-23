@@ -15,6 +15,7 @@ from switch_pipeline.db.migrate import apply_migrations
 from switch_pipeline.domain.envelope import envelope_json_schema
 from switch_pipeline.errors import FatalPipelineError
 from switch_pipeline.kafka import TopicAdmin
+from switch_pipeline.lifecycle import Shutdown
 from switch_pipeline.observability import configure_logging, get_logger
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import (
@@ -55,6 +56,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     except KeyboardInterrupt:
         return 130
+    except Exception:
+        # Crashes must reach the log shipper as structured lines, not as a
+        # plain-text traceback on stderr.
+        log.exception("unhandled_error")
+        return 1
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -170,7 +176,14 @@ def _replay(args: argparse.Namespace) -> int:
     kafka, postgres = load_settings(KafkaSettings), load_settings(PostgresSettings)
     consumer = load_settings(ConsumerSettings)
     _tool_logging("replay")
-    report = replay_topic(kafka, consumer, postgres, rebuild=args.rebuild, force=args.force)
+    report = replay_topic(
+        kafka,
+        consumer,
+        postgres,
+        rebuild=args.rebuild,
+        force=args.force,
+        shutdown=Shutdown().install_signal_handlers(),
+    )
     _report(report.as_dict())
     return 0 if report.converged else 1
 

@@ -52,6 +52,7 @@ def replay_topic(
     *,
     rebuild: bool,
     force: bool,
+    shutdown: Shutdown,
 ) -> ReplayReport:
     if not force:
         _wait_for_idle_group(TopicAdmin(kafka, client_id="switch-replay-admin"), kafka)
@@ -62,7 +63,7 @@ def replay_topic(
             settings=consumer,
             pool=pool,
             processor=EventProcessor(load_rules(consumer.quality_rules_path)),
-            shutdown=Shutdown().install_signal_handlers(),
+            shutdown=shutdown,
             heartbeat=Heartbeat(None),
             client_id="switch-replay",
         )
