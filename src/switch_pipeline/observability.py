@@ -28,6 +28,7 @@ def configure_logging(settings: LogSettings, *, service: str, stream: TextIO | N
 
     CLI tools log to stderr so that their stdout carries only the JSON report.
     """
+    output = stream or sys.stdout
     shared: list[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
@@ -44,19 +45,21 @@ def configure_logging(settings: LogSettings, *, service: str, stream: TextIO | N
         )
         render = [tracebacks, structlog.processors.JSONRenderer()]
     else:
-        render = [structlog.dev.ConsoleRenderer()]
+        render = [structlog.dev.ConsoleRenderer(colors=output.isatty())]
 
     structlog.configure(
         processors=[*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
+        # Uncached, module-level loggers always follow the current configuration,
+        # even those first used before a reconfiguration.
+        cache_logger_on_first_use=False,
     )
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=shared,
         processors=[structlog.stdlib.ProcessorFormatter.remove_processors_meta, *render],
     )
-    handler = logging.StreamHandler(stream or sys.stdout)
+    handler = logging.StreamHandler(output)
     handler.setFormatter(formatter)
     root = logging.getLogger()
     root.handlers[:] = [handler]
