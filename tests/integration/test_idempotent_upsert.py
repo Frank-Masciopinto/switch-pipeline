@@ -5,6 +5,7 @@ tested against the database rather than a mock of it.
 """
 
 import random
+import threading
 from collections import Counter
 from typing import Any
 
@@ -13,6 +14,7 @@ from psycopg.rows import dict_row
 
 from switch_pipeline.consumer.processor import EventProcessor, Outcome
 from switch_pipeline.quality.rules import load_rules
+from switch_pipeline.settings import PostgresSettings
 from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.transport.codec import InboundMessage
 from tests.helpers import make_event, make_message, message_for, order_payload
@@ -58,6 +60,34 @@ def test_duplicates_within_one_batch_are_skipped(sink: PostgresSink) -> None:
     event = make_event()
     outcomes = process(sink, [message_for(event, offset=0), message_for(event, offset=1)])
     assert outcomes == {Outcome.APPLIED: 1, Outcome.DUPLICATE: 1}
+
+
+def test_an_event_another_instance_logs_concurrently_counts_as_a_duplicate(
+    sink: PostgresSink, postgres_settings: PostgresSettings, db: str
+) -> None:
+    # Two consumer instances can briefly hold the same record, e.g. during a rebalance.
+    event = make_event(key=11)
+    other = PostgresSink.open(postgres_settings, application_name="tests-other-instance")
+    outcomes: list[Counter[Outcome]] = []
+
+    def second_instance() -> None:
+        with other.transaction() as writer:
+            outcomes.append(EventProcessor(RULES).process_batch(writer, [message_for(event)]))
+
+    try:
+        with sink.transaction() as first:
+            assert EventProcessor(RULES).process_batch(first, [message_for(event)]) == {
+                Outcome.APPLIED: 1
+            }
+            worker = threading.Thread(target=second_instance)
+            worker.start()
+            worker.join(timeout=1)
+            assert worker.is_alive(), "waits on the first instance's uncommitted insert"
+        worker.join(timeout=10)
+    finally:
+        other.close()
+    assert outcomes == [{Outcome.DUPLICATE: 1}]
+    assert query(db, "SELECT count(*) AS n FROM event_log")[0]["n"] == 1
 
 
 def test_a_re_emitted_change_with_new_capture_metadata_is_a_duplicate(sink: PostgresSink) -> None:
