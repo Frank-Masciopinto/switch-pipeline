@@ -17,6 +17,11 @@ current state per entity, the rejected records and pipeline statistics.
   byte-identical state (`make rebuild` proves it with checksums).
 - **No silent drops.** Every record is applied, skipped as a counted duplicate,
   or quarantined with a reason that the API shows.
+- **Enforced boundaries, honest failures.** The pipeline logic depends only on
+  interfaces it declares; the Snowflake, Kafka and PostgreSQL code sits behind
+  them, and a test fails the build when an import crosses a boundary. Only
+  transient failures are retried; anything else stops the worker with a clear
+  log line instead of looping.
 - **One place for configuration, one place for rules.** Every setting lives in
   `.env` (template: [`.env.example`](.env.example)); every data-quality rule
   lives in [`config/quality_rules.yaml`](config/quality_rules.yaml).
@@ -97,6 +102,57 @@ still talks to it through the real `snowflake-connector-python`.
 One image serves every role (`switch-pipeline adapter|consumer|api|...`). A
 one-shot `init` service applies the database migrations and creates the topic
 before the workers start.
+
+### Code structure
+
+The code follows a ports-and-adapters layout. The capture loop and the
+materializer hold the pipeline's logic and reach the outside world only
+through small interfaces they declare themselves; the Snowflake, Kafka and
+PostgreSQL code implements those interfaces and holds no pipeline logic.
+
+| Layer | Code | May import |
+| --- | --- | --- |
+| Domain | `domain/` (envelope, quarantine entry, log position), `quality/` (rule engine) | only itself and `errors.py` |
+| Application | `adapter/` (sync loop, mapper, watermark), `consumer/` (runner, processor) | the domain and its own `ports.py`; the consumer also uses the wire format in `transport/codec.py`, which is pure |
+| Integrations | `adapter/snowflake.py` (Snowflake), `transport/` (Kafka), `sink/` (PostgreSQL), `api/` (HTTP) | the domain and the ports they implement |
+| Composition roots | `cli.py`, `adapter/main.py`, `consumer/main.py`, `api/main.py`, `tools/` | anything: they wire the rest together |
+
+| Port | Declared in | Implemented by |
+| --- | --- | --- |
+| `ChangeSource` | `adapter/ports.py` | `SnowflakeChangeSource` in `adapter/snowflake.py` |
+| `EventPublisher` | `adapter/ports.py` | `KafkaEventPublisher` in `transport/producer.py` |
+| `SyncStateStore`, `OwnershipGuard` | `adapter/ports.py` | `PostgresSyncStateStore`, `SourceLock` in `sink/sync_state.py` |
+| `RecordStream`, `BoundedStream` | `consumer/ports.py` | `KafkaRecordStream`, `BoundedKafkaStream` in `transport/consumer.py` |
+| `Sink`, `SinkWriter` | `consumer/ports.py` | `PostgresSink`, `PostgresSinkWriter` in `sink/` |
+
+[`tests/unit/test_architecture.py`](tests/unit/test_architecture.py) checks
+every module's imports against these rules, and checks that each client library
+is imported only by its integration: snowflake-connector by
+`adapter/snowflake.py` (and the operator tools), confluent-kafka by
+`transport/`, psycopg by `sink/`, FastAPI by `api/`. All code, tests included,
+passes `mypy --strict`, and the package ships `py.typed`.
+
+### Failure handling
+
+[`errors.py`](src/switch_pipeline/errors.py) defines the few error types every
+component uses. Each integration translates its client library's exceptions
+into them, so the application code reacts to what a failure means rather than
+to driver classes.
+
+| Error | Meaning | What happens |
+| --- | --- | --- |
+| `RetryableError`: `SourceUnavailableError`, `BrokerUnavailableError`, `DatabaseUnavailableError` | Snowflake is unreachable or its table does not exist yet; Kafka did not confirm delivery; PostgreSQL is unreachable | The adapter logs `sync_cycle_retrying` with the `error_type` and retries the cycle with capped backoff. The consumer retries the batch up to `CONSUMER_DB_MAX_ATTEMPTS` times, then exits without committing offsets and is restarted. A one-shot command exits 1 with `dependency_unavailable`. |
+| `FatalPipelineError` | Retrying cannot help: a row breaks the source contract, the watermark would move backwards, the topic is missing, the source lock was lost, a record can never be delivered, a migration was edited | The process stops with `fatal_error` and exit code 1. Nothing is skipped. |
+| `ConfigurationError` | `.env` or the rules file is invalid | A message naming each problem on stderr and exit code 2, before any work starts. |
+| `RecordRejectedError` | PostgreSQL cannot store one record's values | That record is quarantined as `sink_rejected`; the rest of the batch continues. |
+| Anything else | A bug, or a failure nobody anticipated | Not retried, so it cannot hide in a loop of warnings: the process stops with `unhandled_error` and the traceback. |
+
+Stopping is always safe, because state only moves after a durable write, and
+compose restarts stopped workers. Cleanup never hides the error that caused it:
+a failed Snowflake session is closed best-effort with the close error logged
+rather than raised, resources are released through exit stacks, and the
+migration lock is released by ending its session instead of by a statement
+that could fail.
 
 ## How it works
 
@@ -241,8 +297,9 @@ commits. Per record:
    character) rolls back to the savepoint and is quarantined as `sink_rejected`,
    without failing the batch.
 
-Transient database errors retry the whole batch with backoff; nothing is
-committed to Kafka until the database has it.
+If the database is briefly unreachable, the consumer retries the whole batch
+with backoff, up to `CONSUMER_DB_MAX_ATTEMPTS` times, then exits and is
+restarted. Offsets are never committed before the database has the batch.
 
 **Replay.** `make replay` stops the consumer, snapshots the end offsets, lets
 the group catch up to them, takes checksums of the current state, event log
@@ -279,13 +336,13 @@ at startup while auth is disabled.
 
 | Check | Where | What happens to a failing record |
 | --- | --- | --- |
-| Envelope schema | consumer | quarantined `schema_violation`, raw bytes kept |
+| Envelope schema | consumer | quarantined `schema_violation`, with the exact bytes (`raw_bytes`) and a readable copy (`raw_value`) |
 | Duplicate event id, same content | consumer | skipped, counted in `duplicates_skipped` |
 | Duplicate event id, different content | consumer | quarantined `event_id_conflict` |
 | Rules with `severity: reject` (not null, non-negative total, known status, key matches envelope, ...) | consumer | quarantined `quality_rule_failed`; state keeps the last good version |
 | Rules with `severity: warn` (order date after capture, comment length) | consumer | accepted, violation stored in `event_log.quality_warnings` |
 | Value the database cannot store | consumer | quarantined `sink_rejected`; the rest of the batch continues |
-| Row violating the source contract (NULL key/version/timestamp) | adapter | adapter stops (fail loudly); nothing is skipped |
+| Row violating the source contract (NULL key, version or timestamp, a column type with no JSON mapping) | adapter | adapter stops (fail loudly); nothing is skipped |
 
 The checks run in the consumer because that is the trust boundary of the sink:
 it cannot trust its input, whatever the producer. The topic stays a faithful
@@ -337,7 +394,8 @@ Adding a rule for an existing check (`not_null`, `min`, `max`,
 file is mounted, so no rebuild is needed. A new kind of check is one small model
 class in [`rules.py`](src/switch_pipeline/quality/rules.py). The file is
 validated at startup: an unknown check, a typo in an option or a duplicate rule
-name stops the consumer.
+name stops the consumer (and `make check-config`) with exit code 2 and a
+message naming the file and each problem.
 
 **What is deliberately not configurable:** the delivery guarantee depends on
 `acks=all` and producer idempotence, and correctness depends on committing
@@ -403,41 +461,53 @@ FAIL  source_table  SQL compilation error: Object 'SWITCH_DEMO.RAW.CUSTOMER_ORDE
 | `Failed to connect` / `404` at sign-in | `SNOWFLAKE_ACCOUNT` must be `<orgname>-<account_name>`; the last query of the setup script prints it. |
 | `Incorrect username or password` / MFA required | Service users cannot use passwords; use the key pair, or put a programmatic access token in `SNOWFLAKE_PASSWORD`. |
 | Key file unreadable on a Linux host | The container runs as uid 10001: `sudo chown 10001 secrets/snowflake_rsa_key.p8`. |
-| Adapter logs `source_unavailable` | Expected until `make seed` has created the table; the adapter retries with backoff and starts syncing on its own. |
+| Adapter logs `sync_cycle_retrying` with `error_type: SourceUnavailableError` | Expected until `make seed` has created the table; the adapter retries with backoff and starts syncing on its own. |
 | `make replay` waits on `waiting_for_idle_consumer_group` | A consumer that was stopped mid-join stays listed until the broker evicts it (up to 45 s); the tool waits for it. |
 | Ports already in use | Change `API_HOST_PORT`, `POSTGRES_HOST_PORT` or `KAFKA_HOST_PORT` in `.env`. |
 
 ## Testing
 
-`make check` runs ruff, `mypy --strict` and pytest (about 200 unit and
-integration tests) with a 90% coverage gate (currently about 94%). `make audit`
-checks the locked runtime dependencies for known vulnerabilities. CI runs all
-of it on every push and weekly, and Dependabot proposes dependency and action
-updates.
+`make check` runs ruff, `mypy --strict` over the code and the tests, and pytest
+(about 230 unit and integration tests) with a 90% coverage gate (currently
+about 95%). `make audit` checks the locked runtime dependencies for known
+vulnerabilities. CI runs all of it on every push and weekly, and Dependabot
+proposes dependency and action updates.
 
 - **Unit** (no Docker): watermark ordering and keyset query construction,
   envelope validation and deterministic ids, every quality check, row-to-event
-  mapping, configuration consistency, and the sync loop against in-memory
+  mapping, configuration consistency, the architecture rules, the API and CLI
+  with their database really unreachable, and the sync loop against in-memory
   implementations of its ports. The sync-loop tests cover restarts, reruns
   emitting nothing, ties at batch boundaries, the settle window, a failed
   publish leaving the watermark in place (and the retry re-emitting identical
-  ids), and shutdown between batches.
+  ids), shutdown between batches, and a bug stopping the loop instead of being
+  retried.
+- **Contract** (`test_port_contracts.py`): every `ChangeSource` and
+  `SyncStateStore` scenario runs against both the in-memory fake the unit tests
+  use and the real implementation (Snowflake through the emulator,
+  PostgreSQL), so the fakes cannot drift from what they stand in for.
 - **Integration** (Docker, via testcontainers, with the same images as the
   compose stack): idempotent upserts on a real PostgreSQL (redeliveries,
   out-of-order delivery, shuffled replays converging to identical checksums,
-  conflicts, quarantine idempotency, unstorable values), the state store
-  (restart, failed and interrupted batches, the single-writer lock, append-only
-  trigger, migration checksums), the adapter's Snowflake SQL through the real
-  connector against fakesnow, the full pipeline end to end including a rebuild
-  from offset 0, a broker outage, the live consumer loop and its shutdown, the
-  replay and injection tools, the API, and the CLI entry points configured
-  purely from environment variables, as the containers run them.
+  conflicts, a duplicate racing in from a second consumer instance, quarantine
+  idempotency, unstorable values), the state store (restart, failed and
+  interrupted batches, the single-writer lock, append-only trigger, migration
+  checksums), the adapter's Snowflake SQL through the real connector against
+  fakesnow (including an unreachable Snowflake and rejected SQL), the full
+  pipeline end to end including a rebuild from offset 0, a broker outage, a
+  database outage within and beyond the consumer's retry budget, the live
+  consumer loop and its shutdown, the replay and injection tools, the API, and
+  the CLI entry points configured purely from environment variables, as the
+  containers run them.
 
-The idempotency guarantees live in SQL (`ON CONFLICT` and the version guard),
-so those tests run against PostgreSQL rather than a mock of it. fakesnow is a
-test double: it validates the adapter's SQL and the connector path, not full
-Snowflake semantics. Everything that differs from real Snowflake (the account,
-the sample share, key-pair auth) is plain configuration.
+No test mocks a library. Failures are provoked for real (a closed port, a
+paused broker container, a topic that was never created) or injected at a port
+in front of the real implementation. The idempotency guarantees live in SQL
+(`ON CONFLICT` and the version guard), so those tests run against PostgreSQL
+rather than a stand-in. fakesnow is a test double: it validates the adapter's
+SQL and the connector path, not full Snowflake semantics. Everything that
+differs from real Snowflake (the account, the sample share, key-pair auth) is
+plain configuration.
 
 ## Design decisions and trade-offs
 
@@ -462,9 +532,14 @@ the sample share, key-pair auth) is plain configuration.
 - **One topic per source entity with infinite retention.** Replay and rebuild
   are always possible. The price is unbounded growth, which production would
   handle with tiered storage or snapshots.
-- **One image, many commands, and crash-only workers.** Every error either
-  retries with backoff or exits for the orchestrator to restart; because state
+- **One image, many commands, and crash-only workers.** Only errors known to be
+  transient are retried with backoff; everything else exits for the
+  orchestrator to restart, so a bug never hides in a retry loop. Because state
   only moves after a durable write, a crash is always safe.
+- **Ports declared by the application, not by the integrations.** The sync loop
+  and the materializer are tested in milliseconds against fakes, and those
+  fakes pass the same contract tests as the real Snowflake and PostgreSQL code.
+  The cost is a few small protocol classes per component.
 
 ## Throughput
 
@@ -638,14 +713,18 @@ snowflake/setup.sql        one-time Snowflake role, warehouse, user (key pair)
 schemas/                   generated JSON Schema of the envelope
 scripts/demo.sh            recording walkthrough
 src/switch_pipeline/
+  errors.py                the error policy (retryable, fatal, configuration)
   settings.py              the only module that reads the environment
-  domain/                  envelope, quarantine reasons
-  adapter/                 cursor, Snowflake source, mapper, state store + lock, publisher, sync loop
-  consumer/                decoding, processor, repository, consume loop
+  domain/                  envelope, quarantine entry, log position
   quality/                 rule engine
-  api/                     FastAPI app, queries, consumer-lag inspector
-  db/                      migrations and shared SQL
-  tools/                   seed, simulate, inject-bad-events, replay
+  adapter/                 capture: ports, watermark, mapper, sync loop; snowflake.py implements the source
+  consumer/                materialization: ports, processor, runner
+  transport/               Kafka: wire format, producer, record streams, admin, lag
+  sink/                    PostgreSQL: migrations, writer, store, sync state + lock, API reads
+  api/                     FastAPI app, routes, pagination
+  tools/                   seed, simulate, check-snowflake, inject-bad-events, replay
   cli.py                   `switch-pipeline <command>` for every service and tool
-tests/unit, tests/integration
+tests/unit                 no Docker; includes the architecture rules
+tests/integration          testcontainers + fakesnow; includes the port contracts
+tests/fakes.py             in-memory ports, held to the contracts
 ```

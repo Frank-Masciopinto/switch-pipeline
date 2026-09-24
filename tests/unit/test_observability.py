@@ -59,7 +59,7 @@ def test_tracebacks_are_structured_without_frame_locals(capsys: pytest.CaptureFi
     try:
         raise ValueError(f"bad row {len(secret_payload)}")
     except ValueError:
-        get_logger("switch_pipeline.test").exception("sync_cycle_failed")
+        get_logger("switch_pipeline.test").exception("unhandled_error")
 
     [line] = json_lines(capsys)
     [exception] = line["exception"]
