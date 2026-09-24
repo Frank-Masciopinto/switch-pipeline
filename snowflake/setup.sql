@@ -1,6 +1,8 @@
 -- =============================================================================
 -- One-time Snowflake setup for switch-pipeline.
--- Run in a Snowsight worksheet as ACCOUNTADMIN, after `make snowflake-keypair`.
+-- Don't edit this template: `make snowflake-keypair` writes a copy with your
+-- public key filled in to secrets/snowflake_setup.sql (git-ignored). Run that
+-- copy in a Snowsight worksheet as ACCOUNTADMIN ("Run All").
 -- Names match the defaults in .env.example; change both together if you rename.
 --
 -- Snowflake no longer lets service users sign in with a password, so the
@@ -32,7 +34,7 @@ CREATE USER IF NOT EXISTS SWITCH_PIPELINE
     TYPE = SERVICE
     DEFAULT_ROLE = SWITCH_PIPELINE_ROLE
     DEFAULT_WAREHOUSE = SWITCH_WH
-    RSA_PUBLIC_KEY = '<paste the public key printed by make snowflake-keypair>';
+    RSA_PUBLIC_KEY = '<PUBLIC_KEY>';
 GRANT ROLE SWITCH_PIPELINE_ROLE TO USER SWITCH_PIPELINE;
 
 -- Your account identifier for SNOWFLAKE_ACCOUNT (<orgname>-<account_name>):

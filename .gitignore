@@ -1,5 +1,7 @@
 # Local configuration and credentials: never committed
 .env
+.env.*
+!.env.example
 secrets/*
 !secrets/.gitkeep
 

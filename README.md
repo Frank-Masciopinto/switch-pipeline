@@ -48,7 +48,7 @@ is only needed to run the tests locally.
 
 ```bash
 make env                 # creates .env from .env.example: set SNOWFLAKE_ACCOUNT
-make snowflake-keypair   # then run snowflake/setup.sql in Snowsight, pasting the printed key
+make snowflake-keypair   # then run the generated secrets/snowflake_setup.sql in Snowsight
 make up                  # Redpanda, PostgreSQL, adapter, consumer, API on http://localhost:8000/docs
 make seed                # 20,000 TPC-H orders joined with customers -> SWITCH_DEMO.RAW.CUSTOMER_ORDERS
 make simulate            # inserts, updates and a few invalid rows in Snowflake
@@ -345,7 +345,9 @@ them.
 **Credentials** are never in code or git: `.env` and `secrets/` are
 git-ignored. Snowflake no longer allows password sign-in for service users, so
 the pipeline uses key-pair (JWT) authentication as a `TYPE = SERVICE` user,
-created by [`snowflake/setup.sql`](snowflake/setup.sql). The private key is
+created by [`snowflake/setup.sql`](snowflake/setup.sql) (`make snowflake-keypair`
+writes a copy with your public key filled in to `secrets/snowflake_setup.sql`, so
+the tracked template never holds anyone's key). The private key is
 mounted read-only at `/run/secrets` (on Linux hosts, `chown 10001` the key file
 for the container user). `SNOWFLAKE_PASSWORD` accepts a password or a
 programmatic access token instead.
@@ -395,8 +397,8 @@ FAIL  source_table  SQL compilation error: Object 'SWITCH_DEMO.RAW.CUSTOMER_ORDE
 
 | Symptom | Fix |
 | --- | --- |
-| `JWT token is invalid` | The public key on the user does not match the private key: rerun the `CREATE USER ... RSA_PUBLIC_KEY` step of `snowflake/setup.sql` with the key printed by `make snowflake-keypair` (or `ALTER USER SWITCH_PIPELINE SET RSA_PUBLIC_KEY = '...'`). |
-| `Failed to connect` / `404` at sign-in | `SNOWFLAKE_ACCOUNT` must be `<orgname>-<account_name>`; the last query of `setup.sql` prints it. |
+| `JWT token is invalid` | The public key on the user does not match the private key. `CREATE USER IF NOT EXISTS` leaves an existing user untouched, so run `ALTER USER SWITCH_PIPELINE SET RSA_PUBLIC_KEY = '...'` with the key from `secrets/snowflake_setup.sql` (`make snowflake-setup-sql` regenerates that file). |
+| `Failed to connect` / `404` at sign-in | `SNOWFLAKE_ACCOUNT` must be `<orgname>-<account_name>`; the last query of the setup script prints it. |
 | `Incorrect username or password` / MFA required | Service users cannot use passwords; use the key pair, or put a programmatic access token in `SNOWFLAKE_PASSWORD`. |
 | Key file unreadable on a Linux host | The container runs as uid 10001: `sudo chown 10001 secrets/snowflake_rsa_key.p8`. |
 | Adapter logs `source_unavailable` | Expected until `make seed` has created the table; the adapter retries with backoff and starts syncing on its own. |

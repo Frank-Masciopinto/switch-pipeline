@@ -12,7 +12,7 @@ API_AUTH := $(if $(API_AUTH_TOKEN),-H "Authorization: Bearer $(API_AUTH_TOKEN)")
 
 .PHONY: help env up down reset ps logs trace seed simulate inject-bad-events replay rebuild \
         restart-consumer check-config check-snowflake stats events quarantine \
-        snowflake-keypair demo \
+        snowflake-keypair snowflake-setup-sql demo \
         install lint fmt typecheck test test-unit test-integration coverage audit check schema
 
 help: ## List the available targets
@@ -91,8 +91,13 @@ snowflake-keypair: ## Create secrets/snowflake_rsa_key.p8 (+ .pub) for key-pair 
 	@# Owner-only. Docker Desktop maps it to the container user; on Linux hosts
 	@# run `sudo chown 10001 secrets/snowflake_rsa_key.p8` (the image's user).
 	chmod 600 secrets/snowflake_rsa_key.p8
-	@echo "Paste into snowflake/setup.sql (RSA_PUBLIC_KEY):"
-	@grep -v -- '-----' secrets/snowflake_rsa_key.pub | tr -d '\n'; echo
+	@$(MAKE) --no-print-directory snowflake-setup-sql
+
+snowflake-setup-sql: ## Write secrets/snowflake_setup.sql: setup.sql with your public key in it
+	@test -e secrets/snowflake_rsa_key.pub || { echo "run 'make snowflake-keypair' first"; exit 1; }
+	@key=$$(grep -v -- '-----' secrets/snowflake_rsa_key.pub | tr -d '\n'); \
+		sed "s|<PUBLIC_KEY>|$$key|" snowflake/setup.sql > secrets/snowflake_setup.sql
+	@echo "Wrote secrets/snowflake_setup.sql: run it in a Snowsight worksheet as ACCOUNTADMIN (Run All)."
 
 demo: ## Scripted walkthrough for the screen recording
 	./scripts/demo.sh
