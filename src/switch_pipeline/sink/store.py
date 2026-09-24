@@ -28,6 +28,7 @@ class PostgresSink:
             postgres.conninfo(application_name=application_name),
             min_size=1,
             max_size=1,
+            timeout=float(postgres.connect_timeout_seconds),
             open=False,
             check=ConnectionPool.check_connection,
             name="sink",

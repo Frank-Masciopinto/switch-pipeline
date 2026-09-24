@@ -2,18 +2,18 @@
 
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from uuid import uuid4
 
-import psycopg
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
-from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from switch_pipeline import __version__
 from switch_pipeline.api.routes import build_router
+from switch_pipeline.errors import DatabaseUnavailableError
 from switch_pipeline.observability import bound_contextvars, get_logger
 from switch_pipeline.settings import ApiSettings, KafkaSettings, PostgresSettings
+from switch_pipeline.sink.reads import SinkReader
 from switch_pipeline.transport.lag import ConsumerLagInspector
 
 log = get_logger(__name__)
@@ -28,27 +28,20 @@ and pipeline statistics (lag, watermark, consumer lag, convergence checksums).
 def create_app(*, postgres: PostgresSettings, api: ApiSettings, kafka: KafkaSettings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # Read-only sessions: the API cannot modify the sink even by mistake.
-        pool = AsyncConnectionPool(
-            postgres.conninfo(application_name="switch-api", read_only=True),
-            min_size=postgres.pool_min_size,
-            max_size=postgres.pool_max_size,
-            open=False,
-            check=AsyncConnectionPool.check_connection,
-            name="api",
-        )
-        await pool.open(wait=False)  # start even if the database is still coming up
-        inspector = ConsumerLagInspector(kafka)
-        app.state.pool = pool
-        app.state.lag_inspector = inspector
-        log.info("api_started", port=api.port, auth="bearer" if api.auth_token else "none")
-        if api.auth_token is None:
-            log.warning("api_auth_disabled", hint="set API_AUTH_TOKEN outside local development")
-        try:
+        async with AsyncExitStack() as resources:
+            reader = SinkReader(postgres, application_name="switch-api")
+            await reader.open()
+            resources.push_async_callback(reader.close)
+            inspector = ConsumerLagInspector(kafka)
+            resources.callback(inspector.close)
+            app.state.reader = reader
+            app.state.lag_inspector = inspector
+            log.info("api_started", port=api.port, auth="bearer" if api.auth_token else "none")
+            if api.auth_token is None:
+                log.warning(
+                    "api_auth_disabled", hint="set API_AUTH_TOKEN outside local development"
+                )
             yield
-        finally:
-            await pool.close()
-            inspector.close()
 
     app = FastAPI(
         title="Switch event inspection API",
@@ -57,8 +50,7 @@ def create_app(*, postgres: PostgresSettings, api: ApiSettings, kafka: KafkaSett
         lifespan=lifespan,
     )
     app.middleware("http")(_request_context)
-    app.add_exception_handler(PoolTimeout, _database_unavailable)
-    app.add_exception_handler(psycopg.OperationalError, _database_unavailable)
+    app.add_exception_handler(DatabaseUnavailableError, _database_unavailable)
     app.include_router(build_router(api))
     return app
 
@@ -89,7 +81,7 @@ async def _request_context(
 
 
 async def _database_unavailable(request: Request, exc: Exception) -> Response:
-    log.warning("database_unavailable", path=request.url.path, error=str(exc).strip())
+    log.warning("database_unavailable", path=request.url.path, error=str(exc))
     return JSONResponse(
         {"detail": "database unavailable"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE
     )
