@@ -136,11 +136,12 @@ class PostgresSinkWriter:
             """
             INSERT INTO quarantine (
                 quarantine_id, reason, details, event_id, entity_type, entity_key, batch_id,
-                ruleset_fingerprint, raw_value, kafka_topic, kafka_partition, kafka_offset
+                ruleset_fingerprint, raw_value, raw_bytes, kafka_topic, kafka_partition,
+                kafka_offset
             ) VALUES (
                 %(quarantine_id)s, %(reason)s, %(details)s, %(event_id)s, %(entity_type)s,
-                %(entity_key)s, %(batch_id)s, %(ruleset)s, %(raw_value)s, %(topic)s,
-                %(partition)s, %(offset)s
+                %(entity_key)s, %(batch_id)s, %(ruleset)s, %(raw_value)s, %(raw_bytes)s,
+                %(topic)s, %(partition)s, %(offset)s
             )
             ON CONFLICT (quarantine_id) DO NOTHING
             RETURNING quarantine_id
@@ -155,6 +156,7 @@ class PostgresSinkWriter:
                 "batch_id": entry.batch_id,
                 "ruleset": entry.ruleset_fingerprint,
                 "raw_value": storable_text(entry.raw_value),
+                "raw_bytes": entry.raw_value,
                 "topic": entry.position.topic,
                 "partition": entry.position.partition,
                 "offset": entry.position.offset,

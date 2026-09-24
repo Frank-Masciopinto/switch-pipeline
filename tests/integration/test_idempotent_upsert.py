@@ -123,17 +123,21 @@ def test_warnings_are_accepted_and_recorded_on_the_event(sink: PostgresSink, db:
     assert [w["rule"] for w in row["quality_warnings"]] == ["comment_within_source_limit"]
 
 
-def test_schema_violations_are_quarantined_with_the_raw_record(sink: PostgresSink, db: str) -> None:
-    # NUL and invalid UTF-8 cannot live in TEXT columns; they are stored as U+FFFD.
+def test_schema_violations_are_quarantined_with_the_exact_record(
+    sink: PostgresSink, db: str
+) -> None:
     unreadable = make_message(b"not json\x00\xff", key=b"k\x00\xfe", offset=7)
     assert process(sink, [unreadable]) == {Outcome.QUARANTINED: 1}
-    [row] = query(db, "SELECT reason, raw_value, entity_key, kafka_offset FROM quarantine")
-    assert (row["reason"], row["raw_value"], row["entity_key"], row["kafka_offset"]) == (
+    [row] = query(
+        db, "SELECT reason, raw_bytes, raw_value, entity_key, kafka_offset FROM quarantine"
+    )
+    assert (row["reason"], row["raw_bytes"], row["kafka_offset"]) == (
         "schema_violation",
-        "not json\ufffd\ufffd",
-        "k\ufffd\ufffd",
+        b"not json\x00\xff",
         7,
     )
+    # TEXT columns cannot hold NUL or invalid UTF-8: the readable copies show U+FFFD.
+    assert (row["raw_value"], row["entity_key"]) == ("not json\ufffd\ufffd", "k\ufffd\ufffd")
 
 
 def test_quarantine_is_idempotent_under_replay(sink: PostgresSink, db: str) -> None:
