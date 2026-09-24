@@ -1,4 +1,4 @@
-"""What the consumer needs from the store it materializes into."""
+"""What the consumer needs from the log it reads and the store it materializes into."""
 
 from collections.abc import Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -8,6 +8,27 @@ from uuid import UUID
 from switch_pipeline.domain.envelope import ChangeEvent
 from switch_pipeline.domain.log import LogPosition
 from switch_pipeline.domain.quarantine import QuarantineEntry
+from switch_pipeline.transport.codec import InboundMessage
+
+
+class RecordStream(Protocol):
+    """Records to materialize, in log order within each partition."""
+
+    def poll(self, max_records: int, timeout_seconds: float) -> list[InboundMessage]:
+        """The next records, possibly none. Raises FatalPipelineError if the stream is unusable."""
+        ...
+
+    def commit(self, records: Sequence[InboundMessage]) -> None:
+        """Mark these records as durably processed, so reading resumes after them."""
+        ...
+
+
+class BoundedStream(RecordStream, Protocol):
+    """A stream that ends at log positions fixed when it was opened."""
+
+    def finished(self) -> bool:
+        """True once every partition has been read up to its bound."""
+        ...
 
 
 class SinkWriter(Protocol):

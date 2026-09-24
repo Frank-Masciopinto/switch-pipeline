@@ -19,6 +19,7 @@ from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ConsumerSettings, KafkaSettings, PostgresSettings
 from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.transport.admin import TopicAdmin
+from switch_pipeline.transport.consumer import KafkaStreams
 
 log = get_logger(__name__)
 
@@ -53,23 +54,24 @@ def replay_topic(
 ) -> ReplayReport:
     if not force:
         _wait_for_idle_group(TopicAdmin(kafka, client_id="switch-replay-admin"), kafka)
+    streams = KafkaStreams(kafka, client_id="switch-replay")
     with closing(PostgresSink.open(postgres, application_name="switch-replay")) as sink:
         runner = ConsumerRunner(
-            kafka=kafka,
-            settings=consumer,
             sink=sink,
             processor=EventProcessor(load_rules(consumer.quality_rules_path)),
+            settings=consumer,
             shutdown=shutdown,
             heartbeat=Heartbeat(None),
-            client_id="switch-replay",
         )
-        bounds = runner.end_offsets()
-        runner.catch_up(from_beginning=False, until=bounds)
+        bounds = streams.end_offsets()
+        with streams.bounded(from_beginning=False, until=bounds) as stream:
+            runner.catch_up(stream)
         before = sink.checksums()
         if rebuild:
             sink.truncate()
             log.info("sink_truncated")
-        report = runner.catch_up(from_beginning=True, until=bounds)
+        with streams.bounded(from_beginning=True, until=bounds) as stream:
+            report = runner.catch_up(stream)
         after = sink.checksums()
     converged = report.complete and all(before[name] == after[name] for name in _COMPARED)
     return ReplayReport(

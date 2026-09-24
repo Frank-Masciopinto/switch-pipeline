@@ -25,6 +25,7 @@ from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.tools.seed import seed_source
 from switch_pipeline.tools.simulate import simulate_changes
 from switch_pipeline.transport.admin import TopicAdmin
+from switch_pipeline.transport.consumer import KafkaStreams
 from switch_pipeline.transport.producer import KafkaEventPublisher
 from tests.integration.conftest import RULES_PATH, SOURCE_SETTINGS, synthetic_seed
 
@@ -51,14 +52,13 @@ class Pipeline:
             source=SourceRef(system="snowflake", object=table.qualified_name), entity_type="order"
         )
         self.source_id = f"snowflake:{table.qualified_name}"
+        self.streams = KafkaStreams(kafka, client_id="tests")
         self.runner = ConsumerRunner(
-            kafka=kafka,
-            settings=consumer,
             sink=sink,
             processor=EventProcessor(load_rules(RULES_PATH)),
+            settings=consumer,
             shutdown=Shutdown(),
             heartbeat=Heartbeat(None),
-            client_id="tests",
         )
 
     def adapter(self) -> SyncService:
@@ -74,7 +74,8 @@ class Pipeline:
         )
 
     def consume(self, *, from_beginning: bool = False) -> dict[Outcome, int]:
-        report = self.runner.catch_up(from_beginning=from_beginning)
+        with self.streams.bounded(from_beginning=from_beginning) as stream:
+            report = self.runner.catch_up(stream)
         assert report.complete
         return dict(report.outcomes)
 

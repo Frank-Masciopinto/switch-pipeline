@@ -16,6 +16,7 @@ from switch_pipeline.settings import (
 )
 from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.transport.admin import TopicAdmin
+from switch_pipeline.transport.consumer import KafkaStreams
 
 log = get_logger(__name__)
 
@@ -35,14 +36,18 @@ def run_consumer() -> int:
     )
     shutdown = Shutdown().install_signal_handlers()
     TopicAdmin(kafka, client_id="switch-consumer-admin").require_topic()
-    with closing(PostgresSink.open(postgres, application_name="switch-consumer")) as sink:
+    streams = KafkaStreams(kafka, client_id="switch-consumer")
+    with (
+        closing(PostgresSink.open(postgres, application_name="switch-consumer")) as sink,
+        streams.live() as stream,
+    ):
+        log.info("consumer_started", topic=kafka.topic, group=kafka.consumer_group)
         ConsumerRunner(
-            kafka=kafka,
-            settings=settings,
             sink=sink,
             processor=EventProcessor(rules),
+            settings=settings,
             shutdown=shutdown,
             heartbeat=Heartbeat(settings.heartbeat_path),
-            client_id="switch-consumer",
-        ).run()
+        ).run(stream)
+    log.info("consumer_stopped")
     return 0
