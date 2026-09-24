@@ -27,18 +27,22 @@ print("    events=%s by_type=%s entities=%s quarantined=%s duplicates_skipped=%s
 print("    watermark=(%s, %s)" % (w.get("cursor_updated_at"), w.get("cursor_key")))'
 }
 
-entities() {
-  api "/stats" 2>/dev/null | json 'print(data["entities"])' 2>/dev/null || echo 0
+# Records accounted for: accepted events plus quarantined ones. Entities would be
+# the wrong measure: a source that went through a simulation holds invalid rows
+# that never become entities.
+processed() {
+  api "/stats" 2>/dev/null \
+    | json 'print(data["events"]["total"] + data["quarantine"]["total"])' 2>/dev/null || echo 0
 }
 
-wait_for_entities() {
+wait_for_processed() {
   local expected=$1 current=0
   for _ in $(seq 1 90); do
-    current=$(entities)
+    current=$(processed)
     ((current >= expected)) && { stats_line; return 0; }
     sleep 2
   done
-  echo "    timed out waiting for $expected entities (have: $current)"
+  echo "    timed out waiting for $expected processed records (have: $current)"
   return 1
 }
 
@@ -61,18 +65,18 @@ step "2. Seed the Snowflake source table; the adapter runs the initial full sync
 seeded=$(docker compose run --rm -T tools seed 2>/dev/null)
 echo "$seeded"
 rows=$(echo "$seeded" | json 'print(data["rows"])')
-wait_for_entities "$rows"
+wait_for_processed "$rows"
 pause
 
 step "3. Simulate inserts, updates and invalid rows in Snowflake"
-baseline=$(entities)
+baseline=$(processed)
 changes=$(docker compose run --rm -T tools simulate 2>/dev/null)
 echo "$changes" | json '
 print("    inserted:", data["inserted"][:5], "... updated:", data["updated"][:5], "...")
 print("    invalid: ", data["invalid"])'
-accepted=$(echo "$changes" | json 'print(len(data["inserted"]))')
+changed=$(echo "$changes" | json 'print(len(data["inserted"]) + len(data["updated"]) + len(data["invalid"]))')
 echo "    waiting for the adapter (settle window + poll interval) and the consumer..."
-wait_for_entities "$((baseline + accepted))"
+wait_for_processed "$((baseline + changed))"
 pause
 
 step "4. GET /events: the newest change events, with Kafka coordinates and lag"
@@ -86,7 +90,11 @@ pause
 step "5. GET /entities/{key} for the rejected update: state keeps the last good version"
 key=$(echo "$changes" | json 'print(next(i["key"] for i in data["invalid"] if i["kind"] == "unknown_order_status"))')
 api "/entities/$key" | json '
-print("    current version:", data["current"]["entity_version"], "status:", data["current"]["payload"]["o_orderstatus"])
+current = data["current"]
+if current:
+    print("    current version:", current["entity_version"], "status:", current["payload"]["o_orderstatus"])
+else:
+    print("    no accepted version yet: every captured version was rejected")
 print("    quarantined:", [(q["reason"], [v["rule"] for v in q["details"]["violations"]]) for q in data["quarantined"]])'
 pause
 

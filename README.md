@@ -56,7 +56,9 @@ make simulate            # inserts, updates and a few invalid rows in Snowflake
 
 Then look around with `make stats`, `make events` and `make quarantine`, and
 prove idempotency with `make replay` and `make rebuild`. `make demo` runs the
-whole walkthrough used for the screen recording (start from `make reset`).
+whole walkthrough used for the screen recording; `make demo-fresh` first wipes
+the pipeline data and re-seeds the source table, so every take starts from the
+same 20,000 rows.
 If anything on the Snowflake side fails, `make check-snowflake` says which part
 and how to fix it (see [Troubleshooting](#troubleshooting)).
 

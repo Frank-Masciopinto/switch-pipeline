@@ -12,7 +12,7 @@ API_AUTH := $(if $(API_AUTH_TOKEN),-H "Authorization: Bearer $(API_AUTH_TOKEN)")
 
 .PHONY: help env up down reset ps logs trace seed simulate inject-bad-events replay rebuild \
         restart-consumer check-config check-snowflake stats events quarantine \
-        snowflake-keypair snowflake-setup-sql demo \
+        snowflake-keypair snowflake-setup-sql demo demo-fresh \
         install lint fmt typecheck test test-unit test-integration coverage audit check schema
 
 help: ## List the available targets
@@ -100,6 +100,11 @@ snowflake-setup-sql: ## Write secrets/snowflake_setup.sql: setup.sql with your p
 	@echo "Wrote secrets/snowflake_setup.sql: run it in a Snowsight worksheet as ACCOUNTADMIN (Run All)."
 
 demo: ## Scripted walkthrough for the screen recording
+	./scripts/demo.sh
+
+demo-fresh: ## Same, from scratch: wipe pipeline data and re-seed the source table first
+	$(COMPOSE) down --volumes --remove-orphans
+	$(TOOLS) seed --force
 	./scripts/demo.sh
 
 # --- Development (needs uv: https://docs.astral.sh/uv/) ---------------------------
