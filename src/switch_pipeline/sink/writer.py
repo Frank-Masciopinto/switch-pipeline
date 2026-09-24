@@ -1,7 +1,8 @@
-"""Sink writes. Every statement is idempotent, so reprocessing a record (a
-redelivery, a replay from offset 0, a rebuild) converges to the same state."""
+"""Materialization writes. Every statement is idempotent, so reprocessing a record
+(a redelivery, a replay from offset 0, a rebuild) converges to the same state."""
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
 from uuid import UUID
 
@@ -9,7 +10,9 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from switch_pipeline.domain.envelope import ChangeEvent
-from switch_pipeline.transport.codec import InboundMessage
+from switch_pipeline.domain.log import LogPosition
+from switch_pipeline.domain.quarantine import QuarantineEntry
+from switch_pipeline.errors import RecordRejectedError
 
 
 def storable_text(raw: bytes | str | None) -> str | None:
@@ -20,9 +23,19 @@ def storable_text(raw: bytes | str | None) -> str | None:
     return text.replace("\x00", "\ufffd")
 
 
-class SinkRepository:
+class PostgresSinkWriter:
+    """The consumer's SinkWriter, bound to the connection of one open transaction."""
+
     def __init__(self, conn: psycopg.Connection[Any]) -> None:
         self._conn = conn
+
+    @contextmanager
+    def atomic(self) -> Iterator[None]:
+        try:
+            with self._conn.transaction():  # a savepoint inside the batch transaction
+                yield
+        except psycopg.DataError as exc:
+            raise RecordRejectedError(str(exc).strip()) from exc
 
     def known_fingerprints(self, event_ids: Collection[UUID]) -> dict[UUID, str]:
         if not event_ids:
@@ -44,10 +57,9 @@ class SinkRepository:
         event: ChangeEvent,
         *,
         fingerprint: str,
-        warnings: list[dict[str, str]],
-        message: InboundMessage,
+        warnings: Sequence[Mapping[str, str]],
+        position: LogPosition,
     ) -> bool:
-        """Append to the event log; False if the event id is already logged."""
         row = self._conn.execute(
             """
             INSERT INTO event_log (
@@ -75,20 +87,17 @@ class SinkRepository:
                 "captured_at": event.captured_at,
                 "batch_id": event.batch_id,
                 "fingerprint": fingerprint,
-                "warnings": Jsonb(warnings),
-                "topic": message.topic,
-                "partition": message.partition,
-                "offset": message.offset,
+                "warnings": Jsonb([dict(warning) for warning in warnings]),
+                "topic": position.topic,
+                "partition": position.partition,
+                "offset": position.offset,
             },
         ).fetchone()
         return row is not None
 
     def upsert_current_state(self, event: ChangeEvent) -> bool:
-        """Move the entity to this version unless an equal or newer one is current.
-
-        The version guard makes the result independent of arrival order, which
-        is what lets replays and out-of-order redeliveries converge.
-        """
+        # The version guard makes the result independent of arrival order, which
+        # is what lets replays and out-of-order redeliveries converge.
         row = self._conn.execute(
             """
             INSERT INTO entity_current_state AS current (
@@ -122,20 +131,7 @@ class SinkRepository:
         ).fetchone()
         return row is not None
 
-    def quarantine(
-        self,
-        *,
-        quarantine_id: UUID,
-        reason: str,
-        details: Mapping[str, object],
-        event_id: UUID | None,
-        entity_type: str | None,
-        entity_key: str | None,
-        batch_id: UUID | None,
-        ruleset_fingerprint: str | None,
-        message: InboundMessage,
-    ) -> bool:
-        """Record a rejected record; False if it was already quarantined."""
+    def quarantine(self, entry: QuarantineEntry) -> bool:
         row = self._conn.execute(
             """
             INSERT INTO quarantine (
@@ -150,18 +146,18 @@ class SinkRepository:
             RETURNING quarantine_id
             """,
             {
-                "quarantine_id": quarantine_id,
-                "reason": reason,
-                "details": Jsonb(dict(details)),
-                "event_id": event_id,
-                "entity_type": entity_type,
-                "entity_key": storable_text(entity_key),
-                "batch_id": batch_id,
-                "ruleset": ruleset_fingerprint,
-                "raw_value": storable_text(message.value),
-                "topic": message.topic,
-                "partition": message.partition,
-                "offset": message.offset,
+                "quarantine_id": entry.quarantine_id,
+                "reason": entry.reason.value,
+                "details": Jsonb(dict(entry.details)),
+                "event_id": entry.event_id,
+                "entity_type": entry.entity_type,
+                "entity_key": storable_text(entry.entity_key),
+                "batch_id": entry.batch_id,
+                "ruleset": entry.ruleset_fingerprint,
+                "raw_value": storable_text(entry.raw_value),
+                "topic": entry.position.topic,
+                "partition": entry.position.partition,
+                "offset": entry.position.offset,
             },
         ).fetchone()
         return row is not None

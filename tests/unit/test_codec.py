@@ -1,7 +1,6 @@
 import json
 from uuid import uuid4
 
-from switch_pipeline.consumer.repository import storable_text
 from switch_pipeline.domain.envelope import ChangeEvent
 from switch_pipeline.transport.codec import SchemaViolation, decode
 from tests.helpers import make_event, make_message, message_for
@@ -55,11 +54,6 @@ def test_unparseable_correlation_headers_are_ignored() -> None:
     result = decode(make_message(b"garbage", headers={"event_id": "nope"}))
     assert isinstance(result, SchemaViolation)
     assert result.event_id is None
-
-
-def test_storable_text_replaces_bytes_postgres_cannot_hold() -> None:
-    assert storable_text(b"a\x00b\xffc") == "a\ufffdb\ufffdc"
-    assert storable_text(None) is None
 
 
 def test_decoded_events_keep_their_type() -> None:

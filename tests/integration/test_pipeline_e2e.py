@@ -6,7 +6,6 @@ from typing import Any
 import psycopg
 import pytest
 from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
 
 from switch_pipeline.adapter.mapper import EventMapper
 from switch_pipeline.adapter.service import SyncService
@@ -18,11 +17,11 @@ from switch_pipeline.adapter.source import (
 from switch_pipeline.adapter.state import PostgresSyncStateStore
 from switch_pipeline.consumer.processor import EventProcessor, Outcome
 from switch_pipeline.consumer.runner import ConsumerRunner
-from switch_pipeline.db.queries import SINK_CHECKSUMS, TRUNCATE_SINK
 from switch_pipeline.domain.envelope import SourceRef
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ConsumerSettings, KafkaSettings, SnowflakeSettings
+from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.tools.seed import seed_source
 from switch_pipeline.tools.simulate import simulate_changes
 from switch_pipeline.transport.admin import TopicAdmin
@@ -37,9 +36,10 @@ class Pipeline:
         kafka: KafkaSettings,
         consumer: ConsumerSettings,
         db: str,
-        pool: ConnectionPool,
+        sink: PostgresSink,
     ) -> None:
         self.db = db
+        self.sink = sink
         table = SourceTable.from_settings(snowflake, SOURCE_SETTINGS)
         self.source = SnowflakeChangeSource(
             SnowflakeConnectionFactory(snowflake, query_tag="tests"), table
@@ -54,7 +54,7 @@ class Pipeline:
         self.runner = ConsumerRunner(
             kafka=kafka,
             settings=consumer,
-            pool=pool,
+            sink=sink,
             processor=EventProcessor(load_rules(RULES_PATH)),
             shutdown=Shutdown(),
             heartbeat=Heartbeat(None),
@@ -94,11 +94,11 @@ def pipeline(
     kafka_settings: KafkaSettings,
     consumer_settings: ConsumerSettings,
     db: str,
-    sink_pool: ConnectionPool,
+    sink: PostgresSink,
 ) -> Iterator[Pipeline]:
     TopicAdmin(kafka_settings, client_id="tests").ensure_topic()
     seed_source(snowflake_settings, SOURCE_SETTINGS, synthetic_seed(300), force=False)
-    running = Pipeline(snowflake_settings, kafka_settings, consumer_settings, db, sink_pool)
+    running = Pipeline(snowflake_settings, kafka_settings, consumer_settings, db, sink)
     yield running
     running.close()
 
@@ -134,11 +134,10 @@ def test_initial_sync_incremental_changes_quarantine_and_replay_convergence(
     [watermark] = pipeline.query("SELECT cursor_key, initial_sync_completed_at FROM sync_state")
     assert watermark["initial_sync_completed_at"] is not None
 
-    before = pipeline.query(SINK_CHECKSUMS)[0]
-    with psycopg.connect(pipeline.db, autocommit=True) as conn:
-        conn.execute(TRUNCATE_SINK)
+    before = pipeline.sink.checksums()
+    pipeline.sink.truncate()
     assert pipeline.consume(from_beginning=True) == {
         Outcome.APPLIED: 312,
         Outcome.QUARANTINED: 3,
     }
-    assert pipeline.query(SINK_CHECKSUMS)[0] == before
+    assert pipeline.sink.checksums() == before

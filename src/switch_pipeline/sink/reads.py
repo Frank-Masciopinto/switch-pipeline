@@ -11,8 +11,8 @@ from uuid import UUID
 from psycopg import AsyncConnection, sql
 from psycopg.rows import dict_row
 
-from switch_pipeline.db.queries import SINK_CHECKSUMS
 from switch_pipeline.domain.envelope import EventType
+from switch_pipeline.sink.queries import SINK_CHECKSUMS
 
 Row = dict[str, Any]
 

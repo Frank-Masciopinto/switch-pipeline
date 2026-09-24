@@ -1,4 +1,4 @@
-"""SQL shared by the replay tool (sync psycopg) and the API (async psycopg)."""
+"""SQL shared by the store (sync psycopg) and the API reads (async psycopg)."""
 
 from typing import LiteralString
 
@@ -25,4 +25,10 @@ SELECT
 # and quarantine are append-only at the row level.
 TRUNCATE_SINK: LiteralString = """
 TRUNCATE entity_current_state, event_log, quarantine, consumer_counter RESTART IDENTITY
+"""
+
+LATEST_EVENT: LiteralString = """
+SELECT event_id, event_type, schema_version, source, entity_type, entity_key, entity_version,
+       payload, occurred_at, captured_at, batch_id
+FROM event_log ORDER BY log_seq DESC LIMIT 1
 """

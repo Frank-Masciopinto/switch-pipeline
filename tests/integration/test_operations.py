@@ -9,7 +9,6 @@ from collections.abc import Callable
 import psycopg
 import pytest
 from confluent_kafka import Producer
-from psycopg_pool import ConnectionPool
 
 from switch_pipeline.consumer.processor import EventProcessor, Outcome
 from switch_pipeline.consumer.runner import ConsumerRunner
@@ -18,6 +17,7 @@ from switch_pipeline.errors import FatalPipelineError
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ConsumerSettings, KafkaSettings, PostgresSettings
+from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.tools.inject import inject_bad_events
 from switch_pipeline.tools.replay import replay_topic
 from switch_pipeline.transport.admin import TopicAdmin
@@ -39,13 +39,13 @@ def publish(kafka: KafkaSettings, events: list[ChangeEvent]) -> None:
 def runner(
     kafka: KafkaSettings,
     consumer: ConsumerSettings,
-    pool: ConnectionPool,
+    sink: PostgresSink,
     shutdown: Shutdown | None = None,
 ) -> ConsumerRunner:
     return ConsumerRunner(
         kafka=kafka,
         settings=consumer,
-        pool=pool,
+        sink=sink,
         processor=EventProcessor(load_rules(RULES_PATH)),
         shutdown=shutdown or Shutdown(),
         heartbeat=Heartbeat(consumer.heartbeat_path),
@@ -83,11 +83,11 @@ def test_topic_provisioning_is_idempotent_and_required(kafka_settings: KafkaSett
 
 
 def test_the_live_consumer_materializes_events_and_commits_offsets(
-    topic: KafkaSettings, consumer_settings: ConsumerSettings, sink_pool: ConnectionPool, db: str
+    topic: KafkaSettings, consumer_settings: ConsumerSettings, sink: PostgresSink, db: str
 ) -> None:
     publish(topic, [make_event(key=key) for key in range(1, 11)])
     shutdown = Shutdown()
-    worker = threading.Thread(target=runner(topic, consumer_settings, sink_pool, shutdown).run)
+    worker = threading.Thread(target=runner(topic, consumer_settings, sink, shutdown).run)
     worker.start()
     try:
         wait_until(lambda: count(db, "event_log") == 10, timeout=60)
@@ -109,14 +109,14 @@ def test_the_replay_tool_rebuilds_the_sink_and_verifies_convergence(
     topic: KafkaSettings,
     consumer_settings: ConsumerSettings,
     postgres_settings: PostgresSettings,
-    sink_pool: ConnectionPool,
+    sink: PostgresSink,
     db: str,
 ) -> None:
     publish(topic, [make_event(key=key, version=v) for key in range(1, 11) for v in (1, 2)])
     garbage = Producer(producer_config(topic, client_id="tests"))
     garbage.produce(topic.topic, value=b"not an envelope", key=b"x")
     garbage.flush(10)
-    runner(topic, consumer_settings, sink_pool).catch_up(from_beginning=False)
+    runner(topic, consumer_settings, sink).catch_up(from_beginning=False)
 
     report = replay_topic(
         topic, consumer_settings, postgres_settings, rebuild=True, force=False, shutdown=Shutdown()
@@ -131,11 +131,11 @@ def test_injected_bad_records_are_each_quarantined_or_skipped(
     topic: KafkaSettings,
     consumer_settings: ConsumerSettings,
     postgres_settings: PostgresSettings,
-    sink_pool: ConnectionPool,
+    sink: PostgresSink,
     db: str,
 ) -> None:
     publish(topic, [make_event(key=1)])
-    consumer = runner(topic, consumer_settings, sink_pool)
+    consumer = runner(topic, consumer_settings, sink)
     assert consumer.catch_up(from_beginning=False).outcomes == {Outcome.APPLIED: 1}
 
     injected = inject_bad_events(topic, postgres_settings)

@@ -56,7 +56,7 @@ def apply_migrations(conninfo: str) -> list[str]:
 
 
 def _migration_scripts() -> list[tuple[str, str]]:
-    folder = resources.files("switch_pipeline.db").joinpath("migrations")
+    folder = resources.files("switch_pipeline.sink").joinpath("migrations")
     scripts = [
         (entry.name.removesuffix(".sql"), entry.read_text(encoding="utf-8"))
         for entry in folder.iterdir()

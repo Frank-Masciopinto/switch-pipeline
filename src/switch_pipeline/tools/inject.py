@@ -7,30 +7,23 @@ replays of old data all happen in practice.
 
 import json
 import uuid
+from contextlib import closing
 from typing import Any
 
-import psycopg
 from confluent_kafka import Producer
-from psycopg.rows import dict_row
 
-from switch_pipeline.domain.envelope import ChangeEvent
 from switch_pipeline.observability import get_logger
 from switch_pipeline.settings import KafkaSettings, PostgresSettings
+from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.transport.codec import HeaderValue, event_headers
 from switch_pipeline.transport.config import producer_config
 
 log = get_logger(__name__)
 
-_LATEST_EVENT = """
-SELECT event_id, event_type, schema_version, source, entity_type, entity_key, entity_version,
-       payload, occurred_at, captured_at, batch_id
-FROM event_log ORDER BY log_seq DESC LIMIT 1
-"""
-
 
 def inject_bad_events(kafka: KafkaSettings, postgres: PostgresSettings) -> list[dict[str, Any]]:
-    with psycopg.connect(postgres.conninfo(application_name="switch-inject")) as conn:
-        row = conn.cursor(row_factory=dict_row).execute(_LATEST_EVENT).fetchone()
+    with closing(PostgresSink.open(postgres, application_name="switch-inject")) as sink:
+        event = sink.latest_event()
     records: list[tuple[str, str, bytes, list[tuple[str, HeaderValue]]]] = [
         ("malformed_json", "garbage", b'{"event_id": "not closed', []),
         (
@@ -40,10 +33,9 @@ def inject_bad_events(kafka: KafkaSettings, postgres: PostgresSettings) -> list[
             [],
         ),
     ]
-    if row is None:
+    if event is None:
         log.warning("no_logged_event_to_copy", note="run a sync first for the duplicate cases")
     else:
-        event = ChangeEvent.model_validate(row)
         headers = event_headers(event)
         document = event.model_dump(mode="json")
         tampered = event.model_copy(

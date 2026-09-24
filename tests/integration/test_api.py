@@ -2,7 +2,6 @@ from collections.abc import Iterator
 from datetime import timedelta
 from uuid import uuid4
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -13,6 +12,7 @@ from switch_pipeline.api.app import create_app
 from switch_pipeline.consumer.processor import EventProcessor
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ApiSettings, KafkaSettings, PostgresSettings
+from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.transport.admin import TopicAdmin
 from switch_pipeline.transport.codec import InboundMessage
 from tests.helpers import T0, make_event, make_message, message_for, order_payload
@@ -28,9 +28,9 @@ API = ApiSettings(
 )
 
 
-def process(db: str, messages: list[InboundMessage]) -> None:
-    with psycopg.connect(db) as conn, conn.transaction():
-        EventProcessor(load_rules(RULES_PATH)).process_batch(conn, messages)
+def process(sink: PostgresSink, messages: list[InboundMessage]) -> None:
+    with sink.transaction() as writer:
+        EventProcessor(load_rules(RULES_PATH)).process_batch(writer, messages)
 
 
 @pytest.fixture
@@ -43,14 +43,16 @@ def client(
         yield test_client
 
 
-def test_events_are_filterable_and_paginated_newest_first(client: TestClient, db: str) -> None:
+def test_events_are_filterable_and_paginated_newest_first(
+    client: TestClient, sink: PostgresSink
+) -> None:
     batch_id = uuid4()
     events = [
         make_event(key=key, version=version, batch_id=batch_id if key == 2 else None)
         for key in (1, 2)
         for version in (1, 2, 3)
     ]
-    process(db, [message_for(event, offset=i) for i, event in enumerate(events)])
+    process(sink, [message_for(event, offset=i) for i, event in enumerate(events)])
 
     first = client.get("/events", params={"limit": 4}).json()
     second = client.get("/events", params={"limit": 4, "cursor": first["next_cursor"]}).json()
@@ -76,11 +78,11 @@ def test_events_are_filterable_and_paginated_newest_first(client: TestClient, db
 
 
 def test_entity_view_combines_current_state_history_and_rejections(
-    client: TestClient, db: str
+    client: TestClient, sink: PostgresSink
 ) -> None:
     good = [make_event(key=9, version=1), make_event(key=9, version=2)]
     bad = make_event(key=9, version=3, payload=order_payload(9, o_orderstatus="X"))
-    process(db, [message_for(event, offset=i) for i, event in enumerate([*good, bad])])
+    process(sink, [message_for(event, offset=i) for i, event in enumerate([*good, bad])])
 
     view = client.get("/entities/9").json()
     assert view["current"]["entity_version"] == 2
@@ -91,10 +93,12 @@ def test_entity_view_combines_current_state_history_and_rejections(
     assert client.get(f"/events/{uuid4()}").status_code == 404
 
 
-def test_stats_report_counts_lag_watermark_and_checksums(client: TestClient, db: str) -> None:
+def test_stats_report_counts_lag_watermark_and_checksums(
+    client: TestClient, sink: PostgresSink, db: str
+) -> None:
     first = make_event(key=1, version=1)
     process(
-        db,
+        sink,
         [
             message_for(first),
             message_for(make_event(key=1, version=2), offset=1),

@@ -11,13 +11,10 @@ from typing import Any
 import fakesnow
 import psycopg
 import pytest
-from psycopg_pool import ConnectionPool
 from testcontainers.community.kafka import RedpandaContainer
 from testcontainers.community.postgres import PostgresContainer
 from testcontainers.core.config import testcontainers_config
 
-from switch_pipeline.consumer.main import open_sink_pool
-from switch_pipeline.db.migrate import apply_migrations
 from switch_pipeline.settings import (
     ConsumerSettings,
     KafkaSettings,
@@ -26,6 +23,8 @@ from switch_pipeline.settings import (
     SnowflakeSettings,
     SourceSettings,
 )
+from switch_pipeline.sink.migrate import apply_migrations
+from switch_pipeline.sink.store import PostgresSink
 from tests.helpers import REPO_ROOT, read_env_example
 
 ENV = read_env_example()
@@ -97,10 +96,10 @@ def db(migrated: str) -> str:
 
 
 @pytest.fixture
-def sink_pool(db: str, postgres_settings: PostgresSettings) -> Iterator[ConnectionPool]:
-    pool = open_sink_pool(postgres_settings, application_name="tests")
-    yield pool
-    pool.close()
+def sink(db: str, postgres_settings: PostgresSettings) -> Iterator[PostgresSink]:
+    store = PostgresSink.open(postgres_settings, application_name="tests")
+    yield store
+    store.close()
 
 
 @pytest.fixture(scope="session")

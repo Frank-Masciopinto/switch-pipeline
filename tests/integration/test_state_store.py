@@ -11,8 +11,8 @@ from switch_pipeline.adapter.state import (
     SourceLockedError,
     SyncMode,
 )
-from switch_pipeline.db.migrate import apply_migrations
 from switch_pipeline.errors import FatalPipelineError
+from switch_pipeline.sink.migrate import apply_migrations
 from tests.helpers import T0
 
 SOURCE_ID = "snowflake:DB.S.T"

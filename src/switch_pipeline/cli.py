@@ -11,7 +11,6 @@ from switch_pipeline import __version__
 from switch_pipeline.adapter.main import run_adapter
 from switch_pipeline.api.main import run_api
 from switch_pipeline.consumer.main import run_consumer
-from switch_pipeline.db.migrate import apply_migrations
 from switch_pipeline.domain.envelope import envelope_json_schema
 from switch_pipeline.errors import FatalPipelineError
 from switch_pipeline.lifecycle import Shutdown
@@ -31,6 +30,7 @@ from switch_pipeline.settings import (
     SourceSettings,
     load_settings,
 )
+from switch_pipeline.sink.migrate import apply_migrations
 from switch_pipeline.tools.check import check_snowflake
 from switch_pipeline.tools.inject import inject_bad_events
 from switch_pipeline.tools.replay import replay_topic

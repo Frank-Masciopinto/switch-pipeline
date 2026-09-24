@@ -9,7 +9,6 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-import psycopg
 from confluent_kafka import (
     OFFSET_BEGINNING,
     OFFSET_STORED,
@@ -18,10 +17,10 @@ from confluent_kafka import (
     KafkaException,
     TopicPartition,
 )
-from psycopg_pool import ConnectionPool, PoolTimeout
 
+from switch_pipeline.consumer.ports import Sink
 from switch_pipeline.consumer.processor import EventProcessor, Outcome
-from switch_pipeline.errors import FatalPipelineError
+from switch_pipeline.errors import FatalPipelineError, RetryableError
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.observability import get_logger
 from switch_pipeline.retry import Backoff
@@ -46,7 +45,7 @@ class ConsumerRunner:
         *,
         kafka: KafkaSettings,
         settings: ConsumerSettings,
-        pool: ConnectionPool,
+        sink: Sink,
         processor: EventProcessor,
         shutdown: Shutdown,
         heartbeat: Heartbeat,
@@ -54,7 +53,7 @@ class ConsumerRunner:
     ) -> None:
         self._kafka = kafka
         self._settings = settings
-        self._pool = pool
+        self._sink = sink
         self._processor = processor
         self._shutdown = shutdown
         self._heartbeat = heartbeat
@@ -172,9 +171,9 @@ class ConsumerRunner:
         while True:
             attempt += 1
             try:
-                with self._pool.connection() as conn, conn.transaction():
-                    return self._processor.process_batch(conn, messages)
-            except (psycopg.OperationalError, PoolTimeout) as exc:
+                with self._sink.transaction() as writer:
+                    return self._processor.process_batch(writer, messages)
+            except RetryableError as exc:
                 if attempt >= self._settings.db_max_attempts or self._shutdown.requested():
                     raise
                 delay = self._backoff.delay(attempt)
@@ -183,7 +182,8 @@ class ConsumerRunner:
                     attempt=attempt,
                     max_attempts=self._settings.db_max_attempts,
                     retry_in_seconds=round(delay, 2),
-                    error=str(exc).strip(),
+                    error_type=type(exc).__name__,
+                    error=str(exc),
                 )
                 self._shutdown.sleep(delay)
 

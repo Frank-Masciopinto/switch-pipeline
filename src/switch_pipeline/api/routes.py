@@ -13,7 +13,6 @@ from psycopg_pool import AsyncConnectionPool
 from pydantic import AwareDatetime, SecretStr
 from starlette.concurrency import run_in_threadpool
 
-from switch_pipeline.api import queries
 from switch_pipeline.api.schemas import (
     BatchSummary,
     ConsumerLag,
@@ -35,6 +34,7 @@ from switch_pipeline.api.schemas import (
 from switch_pipeline.domain.envelope import EventType
 from switch_pipeline.domain.quarantine import QuarantineReason
 from switch_pipeline.settings import ApiSettings
+from switch_pipeline.sink import reads
 from switch_pipeline.transport.lag import ConsumerLagInspector
 
 
@@ -116,7 +116,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "occurred_after must be earlier than occurred_before",
             )
-        filters = queries.EventFilters(
+        filters = reads.EventFilters(
             entity_key=entity_key,
             entity_type=entity_type,
             event_type=event_type,
@@ -125,18 +125,18 @@ def build_router(settings: ApiSettings) -> APIRouter:
             occurred_before=occurred_before,
         )
         async with pool.connection() as conn:
-            rows, next_before = await queries.list_events(
+            rows, next_before = await reads.list_events(
                 conn, filters, limit=limit, before=_cursor_param(cursor)
             )
         return EventPage(
             items=[EventRecord.from_row(row) for row in rows],
-            next_cursor=None if next_before is None else queries.encode_cursor(next_before),
+            next_cursor=None if next_before is None else reads.encode_cursor(next_before),
         )
 
     @protected.get("/events/{event_id}", response_model=EventRecord, tags=["events"])
     async def get_event(pool: Pool, event_id: UUID) -> EventRecord:
         async with pool.connection() as conn:
-            row = await queries.get_event(conn, event_id)
+            row = await reads.get_event(conn, event_id)
         if row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
         return EventRecord.from_row(row)
@@ -158,7 +158,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
     ) -> EntityView:
         async with pool.connection() as conn:
             if entity_type is None:
-                types = await queries.entity_types_for_key(conn, key)
+                types = await reads.entity_types_for_key(conn, key)
                 if len(types) > 1:
                     raise HTTPException(
                         status.HTTP_409_CONFLICT,
@@ -168,11 +168,11 @@ def build_router(settings: ApiSettings) -> APIRouter:
             current = history = None
             truncated = False
             if entity_type is not None:
-                current = await queries.get_current_state(conn, entity_type, key)
-                history, truncated = await queries.entity_history(
+                current = await reads.get_current_state(conn, entity_type, key)
+                history, truncated = await reads.entity_history(
                     conn, entity_type, key, limit=history_limit
                 )
-            quarantined, _ = await queries.list_quarantine(
+            quarantined, _ = await reads.list_quarantine(
                 conn, reason=None, entity_key=key, limit=history_limit, before=None
             )
         if current is None and not history and not quarantined:
@@ -200,7 +200,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
         cursor: str | None = None,
     ) -> QuarantinePage:
         async with pool.connection() as conn:
-            rows, next_before = await queries.list_quarantine(
+            rows, next_before = await reads.list_quarantine(
                 conn,
                 reason=reason.value if reason else None,
                 entity_key=entity_key,
@@ -209,7 +209,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             )
         return QuarantinePage(
             items=[QuarantineRecord.from_row(row) for row in rows],
-            next_cursor=None if next_before is None else queries.encode_cursor(next_before),
+            next_cursor=None if next_before is None else reads.encode_cursor(next_before),
         )
 
     @protected.get("/stats", response_model=Stats, tags=["stats"], summary="Pipeline observability")
@@ -222,7 +222,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
         ] = False,
     ) -> Stats:
         async with pool.connection() as conn:
-            data = await queries.sink_stats(
+            data = await reads.sink_stats(
                 conn, lag_sample_size=settings.lag_sample_size, include_checksums=checksums
             )
         consumer_lag = await run_in_threadpool(lag_inspector.snapshot)
@@ -270,6 +270,6 @@ def _cursor_param(cursor: str | None) -> int | None:
     if cursor is None:
         return None
     try:
-        return queries.decode_cursor(cursor)
-    except queries.InvalidCursorError as exc:
+        return reads.decode_cursor(cursor)
+    except reads.InvalidCursorError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

@@ -6,21 +6,18 @@ are taken, then the replay runs from offset 0 up to the same offsets.
 """
 
 import time
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
-
-from switch_pipeline.consumer.main import open_sink_pool
 from switch_pipeline.consumer.processor import EventProcessor
 from switch_pipeline.consumer.runner import ConsumerRunner
-from switch_pipeline.db.queries import SINK_CHECKSUMS, TRUNCATE_SINK
 from switch_pipeline.errors import FatalPipelineError
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.observability import get_logger
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ConsumerSettings, KafkaSettings, PostgresSettings
+from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.transport.admin import TopicAdmin
 
 log = get_logger(__name__)
@@ -56,12 +53,11 @@ def replay_topic(
 ) -> ReplayReport:
     if not force:
         _wait_for_idle_group(TopicAdmin(kafka, client_id="switch-replay-admin"), kafka)
-    pool = open_sink_pool(postgres, application_name="switch-replay")
-    try:
+    with closing(PostgresSink.open(postgres, application_name="switch-replay")) as sink:
         runner = ConsumerRunner(
             kafka=kafka,
             settings=consumer,
-            pool=pool,
+            sink=sink,
             processor=EventProcessor(load_rules(consumer.quality_rules_path)),
             shutdown=shutdown,
             heartbeat=Heartbeat(None),
@@ -69,15 +65,12 @@ def replay_topic(
         )
         bounds = runner.end_offsets()
         runner.catch_up(from_beginning=False, until=bounds)
-        before = _checksums(pool)
+        before = sink.checksums()
         if rebuild:
-            with pool.connection() as conn:
-                conn.execute(TRUNCATE_SINK)
+            sink.truncate()
             log.info("sink_truncated")
         report = runner.catch_up(from_beginning=True, until=bounds)
-        after = _checksums(pool)
-    finally:
-        pool.close()
+        after = sink.checksums()
     converged = report.complete and all(before[name] == after[name] for name in _COMPARED)
     return ReplayReport(
         mode="rebuild" if rebuild else "reprocess",
@@ -103,10 +96,3 @@ def _wait_for_idle_group(admin: TopicAdmin, kafka: KafkaSettings) -> None:
             )
         log.info("waiting_for_idle_consumer_group", group=kafka.consumer_group, members=members)
         time.sleep(2)
-
-
-def _checksums(pool: ConnectionPool) -> dict[str, Any]:
-    with pool.connection() as conn:
-        row = conn.cursor(row_factory=dict_row).execute(SINK_CHECKSUMS).fetchone()
-    assert row is not None
-    return dict(row)

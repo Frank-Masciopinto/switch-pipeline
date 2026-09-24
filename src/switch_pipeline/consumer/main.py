@@ -1,6 +1,6 @@
 """Consumer entry point: materializes the topic into PostgreSQL."""
 
-from psycopg_pool import ConnectionPool
+from contextlib import closing
 
 from switch_pipeline.consumer.processor import EventProcessor
 from switch_pipeline.consumer.runner import ConsumerRunner
@@ -14,22 +14,10 @@ from switch_pipeline.settings import (
     PostgresSettings,
     load_settings,
 )
+from switch_pipeline.sink.store import PostgresSink
 from switch_pipeline.transport.admin import TopicAdmin
 
 log = get_logger(__name__)
-
-
-def open_sink_pool(postgres: PostgresSettings, *, application_name: str) -> ConnectionPool:
-    pool = ConnectionPool(
-        postgres.conninfo(application_name=application_name),
-        min_size=1,
-        max_size=1,
-        open=False,
-        check=ConnectionPool.check_connection,
-        name="sink",
-    )
-    pool.open(wait=True, timeout=float(postgres.connect_timeout_seconds))
-    return pool
 
 
 def run_consumer() -> int:
@@ -47,17 +35,14 @@ def run_consumer() -> int:
     )
     shutdown = Shutdown().install_signal_handlers()
     TopicAdmin(kafka, client_id="switch-consumer-admin").require_topic()
-    pool = open_sink_pool(postgres, application_name="switch-consumer")
-    try:
+    with closing(PostgresSink.open(postgres, application_name="switch-consumer")) as sink:
         ConsumerRunner(
             kafka=kafka,
             settings=settings,
-            pool=pool,
+            sink=sink,
             processor=EventProcessor(rules),
             shutdown=shutdown,
             heartbeat=Heartbeat(settings.heartbeat_path),
             client_id="switch-consumer",
         ).run()
-    finally:
-        pool.close()
     return 0
