@@ -5,53 +5,21 @@ import re
 from pathlib import Path
 
 import pytest
-from pydantic_settings import BaseSettings
 
 from switch_pipeline.settings import (
-    AdapterSettings,
     ApiSettings,
     ConfigurationError,
-    ConsumerSettings,
     KafkaSettings,
-    LogSettings,
     PostgresSettings,
-    SeedSettings,
-    SimulateSettings,
     SnowflakeSettings,
-    SourceSettings,
     load_settings,
 )
-from tests.helpers import REPO_ROOT, read_env_example
-
-GROUPS: tuple[type[BaseSettings], ...] = (
-    SnowflakeSettings,
-    SourceSettings,
-    AdapterSettings,
-    KafkaSettings,
-    ConsumerSettings,
-    PostgresSettings,
-    ApiSettings,
-    LogSettings,
-    SeedSettings,
-    SimulateSettings,
-)
-
-
-def settings_variables() -> set[str]:
-    names: set[str] = set()
-    for group in GROUPS:
-        prefix = str(group.model_config.get("env_prefix", ""))
-        for field_name, field in group.model_fields.items():
-            alias = field.validation_alias
-            names.add(alias if isinstance(alias, str) else f"{prefix}{field_name}".upper())
-    return names
+from tests.helpers import REPO_ROOT, SETTINGS_GROUPS, read_env_example, settings_variables
 
 
 @pytest.fixture
 def isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """No inherited variables and no .env file in the working directory."""
-    for name in settings_variables():
-        monkeypatch.delenv(name, raising=False)
+    """An empty working directory: settings come only from what the test sets."""
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -61,7 +29,7 @@ def test_env_example_configures_every_settings_group(
 ) -> None:
     (isolated_env / ".env").write_text((REPO_ROOT / ".env.example").read_text())
     monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "myorg-myaccount")  # the one value users must fill in
-    for group in GROUPS:
+    for group in SETTINGS_GROUPS:
         load_settings(group)
 
 

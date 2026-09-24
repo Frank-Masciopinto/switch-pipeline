@@ -6,11 +6,36 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import JsonValue
+from pydantic_settings import BaseSettings
 
-from switch_pipeline.transport.codec import InboundMessage
 from switch_pipeline.domain.envelope import ChangeEvent, EventType, SourceRef
+from switch_pipeline.settings import (
+    AdapterSettings,
+    ApiSettings,
+    ConsumerSettings,
+    KafkaSettings,
+    LogSettings,
+    PostgresSettings,
+    SeedSettings,
+    SimulateSettings,
+    SnowflakeSettings,
+    SourceSettings,
+)
+from switch_pipeline.transport.codec import InboundMessage
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SETTINGS_GROUPS: tuple[type[BaseSettings], ...] = (
+    SnowflakeSettings,
+    SourceSettings,
+    AdapterSettings,
+    KafkaSettings,
+    ConsumerSettings,
+    PostgresSettings,
+    ApiSettings,
+    LogSettings,
+    SeedSettings,
+    SimulateSettings,
+)
 T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 SOURCE = SourceRef(system="snowflake", object="SWITCH_DEMO.RAW.CUSTOMER_ORDERS")
 
@@ -79,6 +104,17 @@ def message_for(event: ChangeEvent, *, offset: int = 0, partition: int = 0) -> I
         key=event.entity_key.encode(),
         headers={"event_id": str(event.event_id), "batch_id": str(event.batch_id)},
     )
+
+
+def settings_variables() -> set[str]:
+    """Every environment variable a settings group reads."""
+    names: set[str] = set()
+    for group in SETTINGS_GROUPS:
+        prefix = str(group.model_config.get("env_prefix", ""))
+        for field_name, field in group.model_fields.items():
+            alias = field.validation_alias
+            names.add(alias if isinstance(alias, str) else f"{prefix}{field_name}".upper())
+    return names
 
 
 def read_env_example() -> dict[str, str]:
