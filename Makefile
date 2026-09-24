@@ -17,7 +17,7 @@ API_AUTH := $(if $(API_AUTH_TOKEN),-H "Authorization: Bearer $(API_AUTH_TOKEN)")
 
 help: ## List the available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(firstword $(MAKEFILE_LIST)) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # --- Stack -------------------------------------------------------------------
 
