@@ -2,6 +2,7 @@
 
 import secrets
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
@@ -13,9 +14,9 @@ from pydantic import AwareDatetime, SecretStr
 from starlette.concurrency import run_in_threadpool
 
 from switch_pipeline.api import queries
-from switch_pipeline.api.kafka_lag import ConsumerLagInspector
 from switch_pipeline.api.schemas import (
     BatchSummary,
+    ConsumerLag,
     CurrentState,
     EntityView,
     EventCounts,
@@ -34,6 +35,7 @@ from switch_pipeline.api.schemas import (
 from switch_pipeline.domain.envelope import EventType
 from switch_pipeline.domain.quarantine import QuarantineReason
 from switch_pipeline.settings import ApiSettings
+from switch_pipeline.transport.lag import ConsumerLagInspector
 
 
 def get_pool(request: Request) -> AsyncConnectionPool:
@@ -248,7 +250,7 @@ def build_router(settings: ApiSettings) -> APIRouter:
             ),
             watermarks=[Watermark(**row) for row in data["watermarks"]],
             recent_batches=[BatchSummary(**row) for row in data["batches"]],
-            consumer_lag=consumer_lag,
+            consumer_lag=ConsumerLag.model_validate(asdict(consumer_lag)),
             checksums=SinkChecksums(**data["checksums"]) if data["checksums"] else None,
         )
 

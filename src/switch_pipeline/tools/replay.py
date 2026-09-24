@@ -17,11 +17,11 @@ from switch_pipeline.consumer.processor import EventProcessor
 from switch_pipeline.consumer.runner import ConsumerRunner
 from switch_pipeline.db.queries import SINK_CHECKSUMS, TRUNCATE_SINK
 from switch_pipeline.errors import FatalPipelineError
-from switch_pipeline.kafka import TopicAdmin
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.observability import get_logger
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ConsumerSettings, KafkaSettings, PostgresSettings
+from switch_pipeline.transport.admin import TopicAdmin
 
 log = get_logger(__name__)
 

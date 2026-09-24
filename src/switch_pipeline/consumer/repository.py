@@ -8,8 +8,16 @@ from uuid import UUID
 import psycopg
 from psycopg.types.json import Jsonb
 
-from switch_pipeline.consumer.decoding import InboundMessage, storable_text
 from switch_pipeline.domain.envelope import ChangeEvent
+from switch_pipeline.transport.codec import InboundMessage
+
+
+def storable_text(raw: bytes | str | None) -> str | None:
+    """Text PostgreSQL accepts: TEXT rejects NUL and invalid UTF-8."""
+    if raw is None:
+        return None
+    text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    return text.replace("\x00", "\ufffd")
 
 
 class SinkRepository:
@@ -147,7 +155,7 @@ class SinkRepository:
                 "details": Jsonb(dict(details)),
                 "event_id": event_id,
                 "entity_type": entity_type,
-                "entity_key": entity_key,
+                "entity_key": storable_text(entity_key),
                 "batch_id": batch_id,
                 "ruleset": ruleset_fingerprint,
                 "raw_value": storable_text(message.value),

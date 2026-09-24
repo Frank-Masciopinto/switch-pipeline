@@ -1,7 +1,6 @@
 """Adapter entry point: wires Snowflake, PostgreSQL state and Kafka together."""
 
 from switch_pipeline.adapter.mapper import EventMapper
-from switch_pipeline.adapter.publisher import KafkaEventPublisher
 from switch_pipeline.adapter.service import SyncService
 from switch_pipeline.adapter.source import (
     SnowflakeChangeSource,
@@ -10,7 +9,6 @@ from switch_pipeline.adapter.source import (
 )
 from switch_pipeline.adapter.state import PostgresSyncStateStore, SourceLock
 from switch_pipeline.domain.envelope import SourceRef
-from switch_pipeline.kafka import TopicAdmin
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.observability import configure_logging, get_logger
 from switch_pipeline.retry import Backoff
@@ -23,6 +21,8 @@ from switch_pipeline.settings import (
     SourceSettings,
     load_settings,
 )
+from switch_pipeline.transport.admin import TopicAdmin
+from switch_pipeline.transport.producer import KafkaEventPublisher
 
 log = get_logger(__name__)
 

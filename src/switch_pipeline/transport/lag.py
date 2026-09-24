@@ -1,12 +1,29 @@
 """Consumer-group lag in messages: end offsets minus the group's committed offsets."""
 
 import threading
+from dataclasses import dataclass
 
 from confluent_kafka import Consumer, KafkaException, TopicPartition
 
-from switch_pipeline.api.schemas import ConsumerLag, PartitionLag
-from switch_pipeline.kafka import consumer_config
 from switch_pipeline.settings import KafkaSettings
+from switch_pipeline.transport.config import consumer_config
+
+
+@dataclass(frozen=True, slots=True)
+class PartitionLag:
+    partition: int
+    committed_offset: int | None
+    end_offset: int
+    lag: int
+
+
+@dataclass(frozen=True, slots=True)
+class GroupLag:
+    group: str
+    topic: str
+    total: int | None
+    partitions: tuple[PartitionLag, ...]
+    error: str | None
 
 
 class ConsumerLagInspector:
@@ -18,7 +35,7 @@ class ConsumerLagInspector:
         self._lock = threading.Lock()
         self._consumer: Consumer | None = None
 
-    def snapshot(self) -> ConsumerLag:
+    def snapshot(self) -> GroupLag:
         settings = self._settings
         with self._lock:
             try:
@@ -48,11 +65,11 @@ class ConsumerLagInspector:
                     )
             except KafkaException as exc:
                 return self._unavailable(str(exc))
-        return ConsumerLag(
+        return GroupLag(
             group=settings.consumer_group,
             topic=settings.topic,
             total=sum(lag.lag for lag in lags),
-            partitions=lags,
+            partitions=tuple(lags),
             error=None,
         )
 
@@ -67,11 +84,11 @@ class ConsumerLagInspector:
             self._consumer = Consumer(consumer_config(self._settings, client_id="switch-api-lag"))
         return self._consumer
 
-    def _unavailable(self, error: str) -> ConsumerLag:
-        return ConsumerLag(
+    def _unavailable(self, error: str) -> GroupLag:
+        return GroupLag(
             group=self._settings.consumer_group,
             topic=self._settings.topic,
             total=None,
-            partitions=[],
+            partitions=(),
             error=error,
         )

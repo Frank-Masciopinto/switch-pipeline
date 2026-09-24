@@ -17,13 +17,13 @@ from structlog.testing import capture_logs
 
 from switch_pipeline.adapter.cursor import CursorRegressionError, SyncCursor
 from switch_pipeline.adapter.mapper import EventMapper
-from switch_pipeline.adapter.publisher import PublishError
 from switch_pipeline.adapter.service import SyncService
 from switch_pipeline.adapter.source import SourceRow, SourceUnavailableError
 from switch_pipeline.adapter.state import SyncMode, SyncState
 from switch_pipeline.domain.envelope import ChangeEvent, EventType
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.retry import Backoff
+from switch_pipeline.transport.producer import PublishError
 from tests.helpers import SOURCE, T0
 
 SOURCE_ID = "snowflake:TEST"

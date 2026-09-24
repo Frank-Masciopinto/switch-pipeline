@@ -7,9 +7,9 @@ import uuid
 from confluent_kafka import OFFSET_BEGINNING, Consumer, TopicPartition
 from testcontainers.community.kafka import RedpandaContainer
 
-from switch_pipeline.adapter.publisher import KafkaEventPublisher
-from switch_pipeline.kafka import TopicAdmin
 from switch_pipeline.settings import KafkaSettings
+from switch_pipeline.transport.admin import TopicAdmin
+from switch_pipeline.transport.producer import KafkaEventPublisher
 from tests.helpers import make_event
 
 

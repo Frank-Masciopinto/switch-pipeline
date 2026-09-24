@@ -9,16 +9,16 @@ advance its watermark. Re-sending can duplicate events the broker did store
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
 from switch_pipeline.domain.envelope import ChangeEvent
 from switch_pipeline.errors import FatalPipelineError
-from switch_pipeline.kafka import event_headers, producer_config
 from switch_pipeline.observability import get_logger
 from switch_pipeline.retry import Backoff
 from switch_pipeline.settings import KafkaSettings
+from switch_pipeline.transport.codec import encode
+from switch_pipeline.transport.config import producer_config
 
 log = get_logger(__name__)
 
@@ -45,10 +45,6 @@ class PublishError(Exception):
 
 class FatalPublishError(PublishError, FatalPipelineError):
     """The producer is unusable or an event can never be delivered."""
-
-
-class EventPublisher(Protocol):
-    def publish(self, events: Sequence[ChangeEvent]) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,13 +115,15 @@ class KafkaEventPublisher:
     def _produce(
         self, event: ChangeEvent, callback: Callable[[KafkaError | None, Message], None]
     ) -> None:
-        key = event.entity_key.encode("utf-8")
-        value = event.to_json_bytes()
-        headers = event_headers(event)
+        record = encode(event)
         while True:
             try:
                 self._producer.produce(
-                    self._topic, value=value, key=key, headers=headers, on_delivery=callback
+                    self._topic,
+                    value=record.value,
+                    key=record.key,
+                    headers=record.headers,
+                    on_delivery=callback,
                 )
             except BufferError:
                 # Local queue is full: serve delivery reports to free space, then retry.

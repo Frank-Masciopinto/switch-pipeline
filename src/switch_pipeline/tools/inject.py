@@ -14,9 +14,10 @@ from confluent_kafka import Producer
 from psycopg.rows import dict_row
 
 from switch_pipeline.domain.envelope import ChangeEvent
-from switch_pipeline.kafka import HeaderValue, event_headers, producer_config
 from switch_pipeline.observability import get_logger
 from switch_pipeline.settings import KafkaSettings, PostgresSettings
+from switch_pipeline.transport.codec import HeaderValue, event_headers
+from switch_pipeline.transport.config import producer_config
 
 log = get_logger(__name__)
 

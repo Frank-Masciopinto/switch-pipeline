@@ -4,7 +4,6 @@ from psycopg_pool import ConnectionPool
 
 from switch_pipeline.consumer.processor import EventProcessor
 from switch_pipeline.consumer.runner import ConsumerRunner
-from switch_pipeline.kafka import TopicAdmin
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.observability import configure_logging, get_logger
 from switch_pipeline.quality.rules import load_rules
@@ -15,6 +14,7 @@ from switch_pipeline.settings import (
     PostgresSettings,
     load_settings,
 )
+from switch_pipeline.transport.admin import TopicAdmin
 
 log = get_logger(__name__)
 

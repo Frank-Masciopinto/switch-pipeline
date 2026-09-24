@@ -9,7 +9,6 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from switch_pipeline.adapter.mapper import EventMapper
-from switch_pipeline.adapter.publisher import KafkaEventPublisher
 from switch_pipeline.adapter.service import SyncService
 from switch_pipeline.adapter.source import (
     SnowflakeChangeSource,
@@ -21,12 +20,13 @@ from switch_pipeline.consumer.processor import EventProcessor, Outcome
 from switch_pipeline.consumer.runner import ConsumerRunner
 from switch_pipeline.db.queries import SINK_CHECKSUMS, TRUNCATE_SINK
 from switch_pipeline.domain.envelope import SourceRef
-from switch_pipeline.kafka import TopicAdmin
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ConsumerSettings, KafkaSettings, SnowflakeSettings
 from switch_pipeline.tools.seed import seed_source
 from switch_pipeline.tools.simulate import simulate_changes
+from switch_pipeline.transport.admin import TopicAdmin
+from switch_pipeline.transport.producer import KafkaEventPublisher
 from tests.integration.conftest import RULES_PATH, SOURCE_SETTINGS, synthetic_seed
 
 

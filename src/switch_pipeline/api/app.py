@@ -11,10 +11,10 @@ from fastapi.responses import JSONResponse
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from switch_pipeline import __version__
-from switch_pipeline.api.kafka_lag import ConsumerLagInspector
 from switch_pipeline.api.routes import build_router
 from switch_pipeline.observability import bound_contextvars, get_logger
 from switch_pipeline.settings import ApiSettings, KafkaSettings, PostgresSettings
+from switch_pipeline.transport.lag import ConsumerLagInspector
 
 log = get_logger(__name__)
 

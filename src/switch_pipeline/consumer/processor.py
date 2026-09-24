@@ -20,12 +20,12 @@ from uuid import UUID, uuid5
 
 import psycopg
 
-from switch_pipeline.consumer.decoding import InboundMessage, SchemaViolation, decode
 from switch_pipeline.consumer.repository import SinkRepository
 from switch_pipeline.domain.envelope import ChangeEvent, EventType
 from switch_pipeline.domain.quarantine import QuarantineReason
 from switch_pipeline.observability import bound_contextvars, get_logger
 from switch_pipeline.quality.rules import LoadedRuleSet, QualityReport
+from switch_pipeline.transport.codec import InboundMessage, SchemaViolation, decode
 
 log = get_logger(__name__)
 

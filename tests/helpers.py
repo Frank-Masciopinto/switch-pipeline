@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from pydantic import JsonValue
 
-from switch_pipeline.consumer.decoding import InboundMessage
+from switch_pipeline.transport.codec import InboundMessage
 from switch_pipeline.domain.envelope import ChangeEvent, EventType, SourceRef
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

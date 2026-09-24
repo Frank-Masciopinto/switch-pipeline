@@ -1,8 +1,9 @@
 import json
 from uuid import uuid4
 
-from switch_pipeline.consumer.decoding import SchemaViolation, decode, storable_text
+from switch_pipeline.consumer.repository import storable_text
 from switch_pipeline.domain.envelope import ChangeEvent
+from switch_pipeline.transport.codec import SchemaViolation, decode
 from tests.helpers import make_event, make_message, message_for
 
 

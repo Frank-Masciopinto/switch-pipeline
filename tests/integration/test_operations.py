@@ -11,18 +11,19 @@ import pytest
 from confluent_kafka import Producer
 from psycopg_pool import ConnectionPool
 
-from switch_pipeline.adapter.publisher import KafkaEventPublisher
-from switch_pipeline.api.kafka_lag import ConsumerLagInspector
 from switch_pipeline.consumer.processor import EventProcessor, Outcome
 from switch_pipeline.consumer.runner import ConsumerRunner
 from switch_pipeline.domain.envelope import ChangeEvent
 from switch_pipeline.errors import FatalPipelineError
-from switch_pipeline.kafka import TopicAdmin, producer_config
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ConsumerSettings, KafkaSettings, PostgresSettings
 from switch_pipeline.tools.inject import inject_bad_events
 from switch_pipeline.tools.replay import replay_topic
+from switch_pipeline.transport.admin import TopicAdmin
+from switch_pipeline.transport.config import producer_config
+from switch_pipeline.transport.lag import ConsumerLagInspector
+from switch_pipeline.transport.producer import KafkaEventPublisher
 from tests.helpers import make_event
 from tests.integration.conftest import RULES_PATH
 

@@ -10,11 +10,11 @@ from pydantic import SecretStr
 from switch_pipeline.adapter.cursor import SyncCursor
 from switch_pipeline.adapter.state import PostgresSyncStateStore, SyncMode
 from switch_pipeline.api.app import create_app
-from switch_pipeline.consumer.decoding import InboundMessage
 from switch_pipeline.consumer.processor import EventProcessor
-from switch_pipeline.kafka import TopicAdmin
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ApiSettings, KafkaSettings, PostgresSettings
+from switch_pipeline.transport.admin import TopicAdmin
+from switch_pipeline.transport.codec import InboundMessage
 from tests.helpers import T0, make_event, make_message, message_for, order_payload
 from tests.integration.conftest import RULES_PATH
 

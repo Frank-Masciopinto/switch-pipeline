@@ -12,10 +12,10 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from switch_pipeline.consumer.decoding import InboundMessage
 from switch_pipeline.consumer.processor import EventProcessor, Outcome
 from switch_pipeline.db.queries import SINK_CHECKSUMS, TRUNCATE_SINK
 from switch_pipeline.quality.rules import load_rules
+from switch_pipeline.transport.codec import InboundMessage
 from tests.helpers import make_event, make_message, message_for, order_payload
 from tests.integration.conftest import RULES_PATH
 

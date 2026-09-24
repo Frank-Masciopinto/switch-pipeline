@@ -20,14 +20,15 @@ from confluent_kafka import (
 )
 from psycopg_pool import ConnectionPool, PoolTimeout
 
-from switch_pipeline.consumer.decoding import InboundMessage
 from switch_pipeline.consumer.processor import EventProcessor, Outcome
 from switch_pipeline.errors import FatalPipelineError
-from switch_pipeline.kafka import consumer_config
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.observability import get_logger
 from switch_pipeline.retry import Backoff
 from switch_pipeline.settings import ConsumerSettings, KafkaSettings
+from switch_pipeline.transport.codec import InboundMessage
+from switch_pipeline.transport.config import consumer_config
+from switch_pipeline.transport.consumer import to_inbound
 
 log = get_logger(__name__)
 
@@ -143,7 +144,7 @@ class ConsumerRunner:
         for record in records:
             error = record.error()
             if error is None:
-                message = InboundMessage.from_kafka(record)
+                message = to_inbound(record)
                 if bounds is None or message.offset < bounds.get(message.partition, 0):
                     messages.append(message)
             elif error.fatal():

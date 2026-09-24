@@ -15,16 +15,21 @@ from uuid import UUID, uuid4
 
 from switch_pipeline.adapter.cursor import SyncCursor, advance_cursor
 from switch_pipeline.adapter.mapper import EventMapper
-from switch_pipeline.adapter.publisher import EventPublisher
 from switch_pipeline.adapter.source import ChangeSource, SourceRow, SourceUnavailableError
 from switch_pipeline.adapter.state import SyncMode, SyncStateStore
-from switch_pipeline.domain.envelope import EventType
+from switch_pipeline.domain.envelope import ChangeEvent, EventType
 from switch_pipeline.errors import FatalPipelineError
 from switch_pipeline.lifecycle import Heartbeat, Shutdown, idle
 from switch_pipeline.observability import bound_contextvars, get_logger
 from switch_pipeline.retry import Backoff
 
 log = get_logger(__name__)
+
+
+class EventPublisher(Protocol):
+    def publish(self, events: Sequence[ChangeEvent]) -> None:
+        """Return once every event is durably accepted by the transport, or raise."""
+        ...
 
 
 class OwnershipGuard(Protocol):

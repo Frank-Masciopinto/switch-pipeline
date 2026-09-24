@@ -14,7 +14,6 @@ from switch_pipeline.consumer.main import run_consumer
 from switch_pipeline.db.migrate import apply_migrations
 from switch_pipeline.domain.envelope import envelope_json_schema
 from switch_pipeline.errors import FatalPipelineError
-from switch_pipeline.kafka import TopicAdmin
 from switch_pipeline.lifecycle import Shutdown
 from switch_pipeline.observability import configure_logging, get_logger
 from switch_pipeline.quality.rules import load_rules
@@ -37,6 +36,7 @@ from switch_pipeline.tools.inject import inject_bad_events
 from switch_pipeline.tools.replay import replay_topic
 from switch_pipeline.tools.seed import seed_source
 from switch_pipeline.tools.simulate import simulate_changes
+from switch_pipeline.transport.admin import TopicAdmin
 
 log = get_logger(__name__)
 

@@ -1,92 +1,26 @@
-"""Kafka client configuration and topic administration shared by every service."""
-
-import logging
-from collections.abc import Mapping, Sequence
-from typing import Any
+"""Explicit topic provisioning and consumer-group inspection."""
 
 from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka.admin import AdminClient
 from confluent_kafka.cimpl import NewTopic
 
-from switch_pipeline.domain.envelope import ChangeEvent
 from switch_pipeline.errors import FatalPipelineError
 from switch_pipeline.observability import get_logger
 from switch_pipeline.settings import KafkaSettings
+from switch_pipeline.transport.config import CLIENT_LOGGER
 
 log = get_logger(__name__)
 
-# librdkafka's own logs go through stdlib logging, hence end up as JSON too.
-_CLIENT_LOGGER = logging.getLogger("switch_pipeline.librdkafka")
-
-
-HeaderValue = str | bytes | None
-RawHeaders = Mapping[str, HeaderValue] | Sequence[tuple[str, HeaderValue]]
-
-
-def event_headers(event: ChangeEvent) -> list[tuple[str, HeaderValue]]:
-    """Correlation ids travel as headers so they survive even an unparseable body."""
-    return [
-        ("event_id", str(event.event_id)),
-        ("batch_id", str(event.batch_id)),
-        ("event_type", event.event_type.value),
-        ("entity_type", event.entity_type),
-        ("schema_version", str(event.schema_version)),
-        ("content_type", "application/json"),
-    ]
-
-
-def decode_headers(raw: RawHeaders | None) -> dict[str, str]:
-    items = raw.items() if isinstance(raw, Mapping) else raw or ()
-    decoded: dict[str, str] = {}
-    for name, value in items:
-        if isinstance(value, bytes):
-            decoded[name] = value.decode("utf-8", "replace")
-        elif value is not None:
-            decoded[name] = value
-    return decoded
-
-
-def producer_config(settings: KafkaSettings, *, client_id: str) -> dict[str, Any]:
-    return {
-        "bootstrap.servers": settings.bootstrap_servers,
-        "client.id": client_id,
-        # The delivery guarantee depends on these, so they are not configurable:
-        # every in-sync replica must persist a record before it counts as sent, and
-        # the idempotent producer lets the broker drop duplicates caused by internal
-        # retries while keeping per-partition order.
-        "acks": "all",
-        "enable.idempotence": True,
-        "max.in.flight.requests.per.connection": 5,
-        "delivery.timeout.ms": settings.delivery_timeout_ms,
-        "compression.type": "zstd",
-        "logger": _CLIENT_LOGGER,
-    }
-
-
-def consumer_config(settings: KafkaSettings, *, client_id: str) -> dict[str, Any]:
-    return {
-        "bootstrap.servers": settings.bootstrap_servers,
-        "group.id": settings.consumer_group,
-        "client.id": client_id,
-        # Offsets are committed explicitly, and only after the database transaction
-        # that materialized the records has committed (at-least-once processing).
-        "enable.auto.commit": False,
-        "enable.auto.offset.store": False,
-        "auto.offset.reset": "earliest",
-        "isolation.level": "read_committed",
-        "logger": _CLIENT_LOGGER,
-    }
-
 
 class TopicAdmin:
-    """Explicit topic provisioning: auto-creation is disabled on the broker, so a
-    misspelt topic name fails loudly instead of creating a 1-partition topic."""
+    """Auto-creation is disabled on the broker, so a misspelt topic name fails
+    loudly instead of silently creating a 1-partition topic."""
 
     def __init__(self, settings: KafkaSettings, *, client_id: str) -> None:
         self._settings = settings
         self._admin = AdminClient(
             {"bootstrap.servers": settings.bootstrap_servers, "client.id": client_id},
-            logger=_CLIENT_LOGGER,
+            logger=CLIENT_LOGGER,
         )
 
     def ensure_topic(self) -> None:
