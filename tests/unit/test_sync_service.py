@@ -1,121 +1,32 @@
 """SyncService behaviour against in-memory implementations of its ports.
 
-The fakes honour the same contracts as the real adapters (keyset semantics of
-the Snowflake query, a transactional state store); the real adapters are
-exercised against emulated Snowflake, PostgreSQL and Redpanda in tests/integration.
+The fakes (tests/fakes.py) pass the same contract tests as the real Snowflake
+source and PostgreSQL store; the real adapters also run end to end against
+emulated Snowflake, PostgreSQL and Redpanda in tests/integration.
 """
 
 from collections.abc import MutableMapping, Sequence
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 import pytest
 from structlog.testing import capture_logs
 
 from switch_pipeline.adapter.cursor import CursorRegressionError, SyncCursor
 from switch_pipeline.adapter.mapper import EventMapper
-from switch_pipeline.adapter.ports import SourceRow, SyncMode, SyncState
+from switch_pipeline.adapter.ports import SourceRow, SyncMode
 from switch_pipeline.adapter.service import SyncService
 from switch_pipeline.domain.envelope import ChangeEvent, EventType
 from switch_pipeline.errors import BrokerUnavailableError, SourceUnavailableError
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.retry import Backoff
+from tests.fakes import BrokerLog, FakeSource, MemoryStateStore
 from tests.helpers import SOURCE, T0
 
 SOURCE_ID = "snowflake:TEST"
 BULK_LOADED_AT = T0 - timedelta(minutes=1)
 FAST_RETRIES = Backoff(initial_seconds=0.001, max_seconds=0.002)
-
-
-class FakeSource:
-    def __init__(self) -> None:
-        self.now = T0
-        self.rows: dict[int, SourceRow] = {}
-
-    def write(self, key: int, *, at: datetime | None = None, **values: Any) -> None:
-        previous = self.rows.get(key)
-        version = previous.version + 1 if previous else 1
-        self.rows[key] = SourceRow(
-            key=key,
-            version=version,
-            updated_at=at or self.now,
-            values={"O_ORDERKEY": key, "ROW_VERSION": version, **values},
-        )
-
-    def upper_bound(self, settle_seconds: int) -> datetime:
-        return self.now - timedelta(seconds=settle_seconds)
-
-    def fetch_changes(
-        self, cursor: SyncCursor | None, upper_bound: datetime, limit: int
-    ) -> list[SourceRow]:
-        ordered = sorted(self.rows.values(), key=lambda row: (row.updated_at, row.key))
-        after = [
-            row
-            for row in ordered
-            if row.updated_at <= upper_bound and (cursor is None or row.position.is_after(cursor))
-        ]
-        return after[:limit]
-
-
-@dataclass
-class _Batch:
-    status: str
-    cursor_end: SyncCursor | None = None
-
-
-class MemoryStateStore:
-    def __init__(self) -> None:
-        self.cursor: SyncCursor | None = None
-        self.completed_at: datetime | None = None
-        self.last_batch_id: UUID | None = None
-        self.batches: dict[UUID, _Batch] = {}
-
-    def load(self, source_id: str) -> SyncState:
-        return SyncState(
-            source_id=source_id,
-            cursor=self.cursor,
-            initial_sync_completed_at=self.completed_at,
-            last_batch_id=self.last_batch_id,
-        )
-
-    def begin_batch(self, *, batch_id: UUID, **_: object) -> None:
-        self.batches[batch_id] = _Batch(status="running")
-
-    def commit_batch(self, *, batch_id: UUID, cursor_end: SyncCursor, **_: object) -> None:
-        batch = self.batches[batch_id]
-        assert batch.status == "running"
-        batch.status, batch.cursor_end = "committed", cursor_end
-        self.cursor, self.last_batch_id = cursor_end, batch_id
-
-    def fail_batch(self, *, batch_id: UUID, error: str) -> None:
-        self.batches[batch_id].status = "failed"
-
-    def mark_initial_sync_completed(self, source_id: str) -> None:
-        self.completed_at = self.completed_at or T0
-
-    def statuses(self) -> list[str]:
-        return [batch.status for batch in self.batches.values()]
-
-
-class BrokerLog:
-    """What the topic holds. Can fail after part of a batch was already written."""
-
-    def __init__(self) -> None:
-        self.events: list[ChangeEvent] = []
-        self.failures_to_inject = 0
-
-    def publish(self, events: Sequence[ChangeEvent]) -> None:
-        if self.failures_to_inject:
-            self.failures_to_inject -= 1
-            self.events.extend(events[: len(events) // 2])
-            raise BrokerUnavailableError("broker unavailable")
-        self.events.extend(events)
-
-    def keys(self) -> list[str]:
-        return [event.entity_key for event in self.events]
 
 
 def make_service(
@@ -178,7 +89,7 @@ def test_initial_sync_publishes_each_row_once_across_batches_of_tied_timestamps(
         True,
     )
     assert broker.keys() == [str(key) for key in range(1, 8)]
-    assert store.cursor == SyncCursor(updated_at=BULK_LOADED_AT, key=7)
+    assert store.load(SOURCE_ID).cursor == SyncCursor(updated_at=BULK_LOADED_AT, key=7)
     assert store.load(SOURCE_ID).mode is SyncMode.INCREMENTAL
 
 
@@ -229,7 +140,7 @@ def test_a_failed_publish_keeps_the_watermark_and_the_retry_re_emits_identical_i
     service = make_service(source, store, broker)
     with pytest.raises(BrokerUnavailableError):
         service.run_cycle()
-    assert store.cursor is None
+    assert store.load(SOURCE_ID).cursor is None
     assert store.statuses() == ["failed"]
 
     service.run_cycle()
@@ -254,7 +165,7 @@ def test_a_source_returning_unordered_rows_is_stopped_before_publishing(
     with pytest.raises(CursorRegressionError):
         make_service(broken, store, broker).run_cycle()
     assert broker.events == []
-    assert store.cursor is None
+    assert store.load(SOURCE_ID).cursor is None
 
 
 def test_shutdown_between_batches_leaves_a_resumable_state(
@@ -262,7 +173,7 @@ def test_shutdown_between_batches_leaves_a_resumable_state(
 ) -> None:
     result = make_service(source, store, broker, stop_after_batches=1).run_cycle()
     assert (result.batches, result.caught_up) == (1, False)
-    assert store.cursor == SyncCursor(updated_at=BULK_LOADED_AT, key=3)
+    assert store.load(SOURCE_ID).cursor == SyncCursor(updated_at=BULK_LOADED_AT, key=3)
     assert store.load(SOURCE_ID).mode is SyncMode.FULL
 
     make_service(source, store, broker).run_cycle()
@@ -342,7 +253,7 @@ def test_run_forever_retries_transient_failures_until_the_cycle_succeeds(
         run_forever(make_service(source, store, broker), shutdown, None)
     assert set(broker.keys()) == {str(key) for key in range(1, 8)}
     assert retried(logs) == ["BrokerUnavailableError", "BrokerUnavailableError"]
-    assert store.cursor == SyncCursor(updated_at=BULK_LOADED_AT, key=7)
+    assert store.load(SOURCE_ID).cursor == SyncCursor(updated_at=BULK_LOADED_AT, key=7)
 
 
 def test_run_forever_does_not_retry_a_bug(store: MemoryStateStore, broker: BrokerLog) -> None:
@@ -388,4 +299,4 @@ def test_a_shutdown_during_a_failing_cycle_exits_without_an_error(
         run_forever(make_service(source, store, BrokerDownDuringShutdown()), shutdown, None)
     assert "sync_cycle_interrupted_by_shutdown" in [entry["event"] for entry in logs]
     assert retried(logs) == []
-    assert store.cursor is None
+    assert store.load(SOURCE_ID).cursor is None
