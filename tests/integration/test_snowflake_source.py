@@ -1,27 +1,32 @@
 """The adapter's Snowflake SQL, run through the real connector against fakesnow."""
 
+import socket
+from dataclasses import replace
 from datetime import UTC
 
 import pytest
+from snowflake.connector.errors import ProgrammingError
 
 from switch_pipeline.adapter.cursor import SyncCursor, advance_cursor
-from switch_pipeline.adapter.source import (
+from switch_pipeline.adapter.ports import SourceRow
+from switch_pipeline.adapter.snowflake import (
     SnowflakeChangeSource,
     SnowflakeConnectionFactory,
-    SourceRow,
     SourceTable,
-    SourceUnavailableError,
 )
+from switch_pipeline.errors import SourceUnavailableError
 from switch_pipeline.settings import SnowflakeSettings
 from switch_pipeline.tools.seed import seed_source
 from switch_pipeline.tools.simulate import simulate_changes
 from tests.integration.conftest import SOURCE_SETTINGS, synthetic_seed
 
 
-def change_source(settings: SnowflakeSettings) -> SnowflakeChangeSource:
+def change_source(
+    settings: SnowflakeSettings, table: SourceTable | None = None
+) -> SnowflakeChangeSource:
     return SnowflakeChangeSource(
         SnowflakeConnectionFactory(settings, query_tag="tests"),
-        SourceTable.from_settings(settings, SOURCE_SETTINGS),
+        table or SourceTable.from_settings(settings, SOURCE_SETTINGS),
     )
 
 
@@ -87,6 +92,36 @@ def test_a_missing_table_is_reported_as_unavailable_with_a_hint(
     source = change_source(snowflake_settings)
     try:
         with pytest.raises(SourceUnavailableError, match="make seed"):
+            source.fetch_changes(None, source.upper_bound(0), 10)
+    finally:
+        source.close()
+
+
+def test_an_unreachable_snowflake_is_reported_as_unavailable(
+    snowflake_settings: SnowflakeSettings,
+) -> None:
+    with socket.socket() as probe:  # a port nothing listens on
+        probe.bind(("127.0.0.1", 0))
+        closed_port = int(probe.getsockname()[1])
+    unreachable = snowflake_settings.model_copy(
+        update={"port": closed_port, "login_timeout_seconds": 3}
+    )
+    source = change_source(unreachable)
+    try:
+        with pytest.raises(SourceUnavailableError, match="unreachable"):
+            source.upper_bound(0)
+    finally:
+        source.close()
+
+
+def test_a_query_snowflake_rejects_is_raised_as_is_not_retried(
+    snowflake_settings: SnowflakeSettings,
+) -> None:
+    seed_source(snowflake_settings, SOURCE_SETTINGS, synthetic_seed(5), force=False)
+    table = SourceTable.from_settings(snowflake_settings, SOURCE_SETTINGS)
+    source = change_source(snowflake_settings, replace(table, key_column="NO_SUCH_COLUMN"))
+    try:
+        with pytest.raises(ProgrammingError, match="NO_SUCH_COLUMN"):
             source.fetch_changes(None, source.upper_bound(0), 10)
     finally:
         source.close()

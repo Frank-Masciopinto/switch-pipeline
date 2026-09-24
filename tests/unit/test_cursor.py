@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from switch_pipeline.adapter.cursor import CursorRegressionError, SyncCursor, advance_cursor
-from switch_pipeline.adapter.source import SourceTable, build_changes_query
+from switch_pipeline.adapter.snowflake import SourceTable, build_changes_query
 from tests.helpers import T0
 
 TABLE = SourceTable(

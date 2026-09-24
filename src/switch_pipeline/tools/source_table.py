@@ -1,6 +1,6 @@
 """DDL and data generation for the demo source table: TPC-H ORDERS joined with CUSTOMER."""
 
-from switch_pipeline.adapter.source import SourceTable
+from switch_pipeline.adapter.snowflake import SourceTable
 
 # Business columns besides the key; the three contract columns come from settings.
 ORDER_COLUMNS: tuple[tuple[str, str], ...] = (

@@ -5,7 +5,7 @@ the Snowflake query, a transactional state store); the real adapters are
 exercised against emulated Snowflake, PostgreSQL and Redpanda in tests/integration.
 """
 
-from collections.abc import Sequence
+from collections.abc import MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,13 +17,12 @@ from structlog.testing import capture_logs
 
 from switch_pipeline.adapter.cursor import CursorRegressionError, SyncCursor
 from switch_pipeline.adapter.mapper import EventMapper
+from switch_pipeline.adapter.ports import SourceRow, SyncMode, SyncState
 from switch_pipeline.adapter.service import SyncService
-from switch_pipeline.adapter.source import SourceRow, SourceUnavailableError
-from switch_pipeline.adapter.state import SyncMode, SyncState
 from switch_pipeline.domain.envelope import ChangeEvent, EventType
+from switch_pipeline.errors import BrokerUnavailableError, SourceUnavailableError
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.retry import Backoff
-from switch_pipeline.transport.producer import PublishError
 from tests.helpers import SOURCE, T0
 
 SOURCE_ID = "snowflake:TEST"
@@ -112,7 +111,7 @@ class BrokerLog:
         if self.failures_to_inject:
             self.failures_to_inject -= 1
             self.events.extend(events[: len(events) // 2])
-            raise PublishError("broker unavailable")
+            raise BrokerUnavailableError("broker unavailable")
         self.events.extend(events)
 
     def keys(self) -> list[str]:
@@ -228,7 +227,7 @@ def test_a_failed_publish_keeps_the_watermark_and_the_retry_re_emits_identical_i
 ) -> None:
     broker.failures_to_inject = 1
     service = make_service(source, store, broker)
-    with pytest.raises(PublishError):
+    with pytest.raises(BrokerUnavailableError):
         service.run_cycle()
     assert store.cursor is None
     assert store.statuses() == ["failed"]
@@ -301,6 +300,11 @@ def run_forever(service: SyncService, shutdown: Shutdown, heartbeat_path: Path |
     )
 
 
+def retried(logs: list[MutableMapping[str, Any]]) -> list[str]:
+    """The error type of every retried cycle, in order."""
+    return [entry["error_type"] for entry in logs if entry["event"] == "sync_cycle_retrying"]
+
+
 def test_run_forever_waits_for_a_missing_source_table_then_syncs(
     store: MemoryStateStore, tmp_path: Path
 ) -> None:
@@ -323,9 +327,8 @@ def test_run_forever_waits_for_a_missing_source_table_then_syncs(
     with capture_logs() as logs:
         run_forever(make_service(source, store, broker), shutdown, tmp_path / "heartbeat")
     assert broker.keys() == ["1", "2", "3"]
-    events = [entry["event"] for entry in logs]
-    assert events.count("source_unavailable") == 2
-    assert "sync_cycle_failed" not in events, "a missing table is expected, not an error"
+    assert retried(logs) == ["SourceUnavailableError", "SourceUnavailableError"]
+    assert "error" not in {entry["log_level"] for entry in logs}, "expected, not an error"
     assert (tmp_path / "heartbeat").exists()
 
 
@@ -338,8 +341,21 @@ def test_run_forever_retries_transient_failures_until_the_cycle_succeeds(
     with capture_logs() as logs:
         run_forever(make_service(source, store, broker), shutdown, None)
     assert set(broker.keys()) == {str(key) for key in range(1, 8)}
-    assert [entry["event"] for entry in logs].count("sync_cycle_failed") == 2
+    assert retried(logs) == ["BrokerUnavailableError", "BrokerUnavailableError"]
     assert store.cursor == SyncCursor(updated_at=BULK_LOADED_AT, key=7)
+
+
+def test_run_forever_does_not_retry_a_bug(store: MemoryStateStore, broker: BrokerLog) -> None:
+    class BrokenSource(FakeSource):
+        def fetch_changes(
+            self, cursor: SyncCursor | None, upper_bound: datetime, limit: int
+        ) -> list[SourceRow]:
+            raise KeyError("O_ORDERKEY")
+
+    with capture_logs() as logs, pytest.raises(KeyError):
+        run_forever(make_service(BrokenSource(), store, broker), Shutdown(), None)
+    assert retried(logs) == [], "retrying would hide the bug behind a warning loop"
+    assert broker.events == []
 
 
 def test_run_forever_stops_on_errors_that_retrying_cannot_fix(
@@ -366,11 +382,10 @@ def test_a_shutdown_during_a_failing_cycle_exits_without_an_error(
     class BrokerDownDuringShutdown(BrokerLog):
         def publish(self, events: Sequence[ChangeEvent]) -> None:
             shutdown.request()
-            raise PublishError("shutdown requested while retrying delivery")
+            raise BrokerUnavailableError("shutdown requested while retrying delivery")
 
     with capture_logs() as logs:
         run_forever(make_service(source, store, BrokerDownDuringShutdown()), shutdown, None)
-    events = [entry["event"] for entry in logs]
-    assert "sync_cycle_interrupted_by_shutdown" in events
-    assert "sync_cycle_failed" not in events
+    assert "sync_cycle_interrupted_by_shutdown" in [entry["event"] for entry in logs]
+    assert retried(logs) == []
     assert store.cursor is None

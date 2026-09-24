@@ -119,7 +119,7 @@ def _init(_: argparse.Namespace) -> int:
     kafka = load_settings(KafkaSettings)
     postgres = load_settings(PostgresSettings)
     configure_logging(load_settings(LogSettings), service="init")
-    applied = apply_migrations(postgres.conninfo(application_name="switch-init"))
+    applied = apply_migrations(postgres, application_name="switch-init")
     TopicAdmin(kafka, client_id="switch-init").ensure_topic()
     log.info("init_completed", migrations_applied=applied)
     return 0
@@ -128,7 +128,7 @@ def _init(_: argparse.Namespace) -> int:
 def _migrate(_: argparse.Namespace) -> int:
     postgres = load_settings(PostgresSettings)
     configure_logging(load_settings(LogSettings), service="migrate")
-    applied = apply_migrations(postgres.conninfo(application_name="switch-migrate"))
+    applied = apply_migrations(postgres, application_name="switch-migrate")
     log.info("migrations_completed", applied=applied)
     return 0
 

@@ -10,30 +10,25 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
 from uuid import UUID, uuid4
 
 from switch_pipeline.adapter.cursor import SyncCursor, advance_cursor
 from switch_pipeline.adapter.mapper import EventMapper
-from switch_pipeline.adapter.source import ChangeSource, SourceRow, SourceUnavailableError
-from switch_pipeline.adapter.state import SyncMode, SyncStateStore
-from switch_pipeline.domain.envelope import ChangeEvent, EventType
-from switch_pipeline.errors import FatalPipelineError
+from switch_pipeline.adapter.ports import (
+    ChangeSource,
+    EventPublisher,
+    OwnershipGuard,
+    SourceRow,
+    SyncMode,
+    SyncStateStore,
+)
+from switch_pipeline.domain.envelope import EventType
+from switch_pipeline.errors import RetryableError
 from switch_pipeline.lifecycle import Heartbeat, Shutdown, idle
 from switch_pipeline.observability import bound_contextvars, get_logger
 from switch_pipeline.retry import Backoff
 
 log = get_logger(__name__)
-
-
-class EventPublisher(Protocol):
-    def publish(self, events: Sequence[ChangeEvent]) -> None:
-        """Return once every event is durably accepted by the transport, or raise."""
-        ...
-
-
-class OwnershipGuard(Protocol):
-    def check(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,25 +106,23 @@ class SyncService:
         shutdown: Shutdown,
         heartbeat: Heartbeat,
     ) -> None:
+        """Sync until shutdown. Only RetryableError is retried: anything else is
+        a bug or needs a person, so it stops the adapter."""
         consecutive_failures = 0
         while not shutdown.requested():
             heartbeat.beat()
             try:
                 result = self.run_cycle()
-            except FatalPipelineError:
-                raise
-            except SourceUnavailableError as exc:
-                consecutive_failures += 1
-                delay = backoff.delay(consecutive_failures)
-                log.warning("source_unavailable", error=str(exc), retry_in_seconds=round(delay, 2))
-            except Exception:
+            except RetryableError as exc:
                 if shutdown.requested():  # e.g. a retry wait cut short by SIGTERM
                     log.info("sync_cycle_interrupted_by_shutdown")
                     return
                 consecutive_failures += 1
                 delay = backoff.delay(consecutive_failures)
-                log.exception(
-                    "sync_cycle_failed",
+                log.warning(
+                    "sync_cycle_retrying",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
                     consecutive_failures=consecutive_failures,
                     retry_in_seconds=round(delay, 2),
                 )

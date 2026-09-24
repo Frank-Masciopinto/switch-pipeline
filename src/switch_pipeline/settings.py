@@ -9,7 +9,6 @@ groups it needs, so e.g. the API never requires Snowflake credentials.
 from pathlib import Path
 from typing import Annotated, Literal, TypeVar
 
-from psycopg.conninfo import make_conninfo
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -122,19 +121,6 @@ class PostgresSettings(_EnvSettings):
     connect_timeout_seconds: PositiveInt
     pool_min_size: PositiveInt
     pool_max_size: PositiveInt
-
-    def conninfo(self, *, application_name: str, read_only: bool = False) -> str:
-        options = {"options": "-c default_transaction_read_only=on"} if read_only else {}
-        return make_conninfo(
-            host=self.host,
-            port=self.port,
-            dbname=self.db,
-            user=self.user,
-            password=self.password.get_secret_value(),
-            connect_timeout=self.connect_timeout_seconds,
-            application_name=application_name,
-            **options,
-        )
 
 
 class ApiSettings(_EnvSettings):

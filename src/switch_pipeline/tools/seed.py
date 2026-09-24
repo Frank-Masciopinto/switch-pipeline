@@ -6,7 +6,7 @@ from typing import Any
 
 from snowflake.connector import DictCursor
 
-from switch_pipeline.adapter.source import SnowflakeConnectionFactory, SourceTable
+from switch_pipeline.adapter.snowflake import SnowflakeConnectionFactory, SourceTable
 from switch_pipeline.observability import get_logger
 from switch_pipeline.settings import SeedSettings, SnowflakeSettings, SourceSettings
 from switch_pipeline.tools.source_table import (

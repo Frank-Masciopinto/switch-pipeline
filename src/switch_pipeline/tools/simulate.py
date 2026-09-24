@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from typing import Any, Final
 
-from switch_pipeline.adapter.source import SnowflakeConnectionFactory, SourceTable
+from switch_pipeline.adapter.snowflake import SnowflakeConnectionFactory, SourceTable
 from switch_pipeline.observability import get_logger
 from switch_pipeline.settings import SnowflakeSettings, SourceSettings
 from switch_pipeline.tools.source_table import synthetic_insert_sql

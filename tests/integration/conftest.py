@@ -23,6 +23,7 @@ from switch_pipeline.settings import (
     SnowflakeSettings,
     SourceSettings,
 )
+from switch_pipeline.sink.connection import conninfo
 from switch_pipeline.sink.migrate import apply_migrations
 from switch_pipeline.sink.store import PostgresSink
 from tests.helpers import REPO_ROOT, read_env_example
@@ -79,9 +80,8 @@ def postgres_settings(postgres_container: PostgresContainer) -> PostgresSettings
 
 @pytest.fixture(scope="session")
 def migrated(postgres_settings: PostgresSettings) -> str:
-    conninfo = postgres_settings.conninfo(application_name="tests")
-    apply_migrations(conninfo)
-    return conninfo
+    apply_migrations(postgres_settings, application_name="tests")
+    return conninfo(postgres_settings, application_name="tests")
 
 
 @pytest.fixture

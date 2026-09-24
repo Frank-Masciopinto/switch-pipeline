@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from switch_pipeline.adapter.mapper import EventMapper, to_json_value
-from switch_pipeline.adapter.source import SourceRow
+from switch_pipeline.adapter.ports import SourceContractError, SourceRow
 from switch_pipeline.domain.envelope import EventType
 from tests.helpers import SOURCE, T0
 
@@ -69,6 +69,6 @@ def test_values_map_to_json_without_losing_precision(value: object, expected: ob
     assert to_json_value(value) == expected
 
 
-def test_unsupported_types_fail_loudly_instead_of_being_dropped() -> None:
-    with pytest.raises(TypeError, match="unsupported"):
+def test_unsupported_types_stop_the_adapter_instead_of_being_dropped() -> None:
+    with pytest.raises(SourceContractError, match="unsupported"):
         to_json_value(object())

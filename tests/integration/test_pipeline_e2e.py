@@ -9,19 +9,24 @@ from psycopg.rows import dict_row
 
 from switch_pipeline.adapter.mapper import EventMapper
 from switch_pipeline.adapter.service import SyncService
-from switch_pipeline.adapter.source import (
+from switch_pipeline.adapter.snowflake import (
     SnowflakeChangeSource,
     SnowflakeConnectionFactory,
     SourceTable,
 )
-from switch_pipeline.adapter.state import PostgresSyncStateStore
 from switch_pipeline.consumer.processor import EventProcessor, Outcome
 from switch_pipeline.consumer.runner import ConsumerRunner
 from switch_pipeline.domain.envelope import SourceRef
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.quality.rules import load_rules
-from switch_pipeline.settings import ConsumerSettings, KafkaSettings, SnowflakeSettings
+from switch_pipeline.settings import (
+    ConsumerSettings,
+    KafkaSettings,
+    PostgresSettings,
+    SnowflakeSettings,
+)
 from switch_pipeline.sink.store import PostgresSink
+from switch_pipeline.sink.sync_state import PostgresSyncStateStore
 from switch_pipeline.tools.seed import seed_source
 from switch_pipeline.tools.simulate import simulate_changes
 from switch_pipeline.transport.admin import TopicAdmin
@@ -36,6 +41,7 @@ class Pipeline:
         snowflake: SnowflakeSettings,
         kafka: KafkaSettings,
         consumer: ConsumerSettings,
+        postgres: PostgresSettings,
         db: str,
         sink: PostgresSink,
     ) -> None:
@@ -45,8 +51,7 @@ class Pipeline:
         self.source = SnowflakeChangeSource(
             SnowflakeConnectionFactory(snowflake, query_tag="tests"), table
         )
-        self.store = PostgresSyncStateStore(db)
-        self.store.open(timeout=10)
+        self.store = PostgresSyncStateStore.open(postgres, application_name="tests")
         self.publisher = KafkaEventPublisher(kafka, client_id="tests", sleep=Shutdown().sleep)
         self.mapper = EventMapper(
             source=SourceRef(system="snowflake", object=table.qualified_name), entity_type="order"
@@ -94,12 +99,15 @@ def pipeline(
     snowflake_settings: SnowflakeSettings,
     kafka_settings: KafkaSettings,
     consumer_settings: ConsumerSettings,
+    postgres_settings: PostgresSettings,
     db: str,
     sink: PostgresSink,
 ) -> Iterator[Pipeline]:
     TopicAdmin(kafka_settings, client_id="tests").ensure_topic()
     seed_source(snowflake_settings, SOURCE_SETTINGS, synthetic_seed(300), force=False)
-    running = Pipeline(snowflake_settings, kafka_settings, consumer_settings, db, sink)
+    running = Pipeline(
+        snowflake_settings, kafka_settings, consumer_settings, postgres_settings, db, sink
+    )
     yield running
     running.close()
 

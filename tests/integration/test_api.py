@@ -2,17 +2,20 @@ from collections.abc import Iterator
 from datetime import timedelta
 from uuid import uuid4
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from switch_pipeline.adapter.cursor import SyncCursor
-from switch_pipeline.adapter.state import PostgresSyncStateStore, SyncMode
+from switch_pipeline.adapter.ports import SyncMode
 from switch_pipeline.api.app import create_app
 from switch_pipeline.consumer.processor import EventProcessor
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import ApiSettings, KafkaSettings, PostgresSettings
+from switch_pipeline.sink.connection import conninfo
 from switch_pipeline.sink.store import PostgresSink
+from switch_pipeline.sink.sync_state import PostgresSyncStateStore
 from switch_pipeline.transport.admin import TopicAdmin
 from switch_pipeline.transport.codec import InboundMessage
 from tests.helpers import T0, make_event, make_message, message_for, order_payload
@@ -94,7 +97,7 @@ def test_entity_view_combines_current_state_history_and_rejections(
 
 
 def test_stats_report_counts_lag_watermark_and_checksums(
-    client: TestClient, sink: PostgresSink, db: str
+    client: TestClient, sink: PostgresSink, postgres_settings: PostgresSettings
 ) -> None:
     first = make_event(key=1, version=1)
     process(
@@ -106,8 +109,7 @@ def test_stats_report_counts_lag_watermark_and_checksums(
             make_message(b"garbage", offset=3),
         ],
     )
-    store = PostgresSyncStateStore(db)
-    store.open(timeout=10)
+    store = PostgresSyncStateStore.open(postgres_settings, application_name="tests")
     batch_id = uuid4()
     store.begin_batch(
         batch_id=batch_id,
@@ -173,6 +175,17 @@ def test_data_endpoints_require_the_bearer_token_when_one_is_configured(
         assert client.get("/quarantine", headers=right).status_code == 200
         assert client.get("/healthz").status_code == 200, "probes stay open"
         assert client.get("/readyz").status_code == 200
+
+
+def test_the_api_database_sessions_cannot_write(
+    db: str, postgres_settings: PostgresSettings
+) -> None:
+    read_only = conninfo(postgres_settings, application_name="tests", read_only=True)
+    with (
+        psycopg.connect(read_only) as conn,
+        pytest.raises(psycopg.errors.ReadOnlySqlTransaction),
+    ):
+        conn.execute("DELETE FROM quarantine")
 
 
 def test_health_endpoints_and_request_ids(client: TestClient) -> None:

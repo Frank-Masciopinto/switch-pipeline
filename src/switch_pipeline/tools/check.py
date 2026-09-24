@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from snowflake.connector import DictCursor
 from snowflake.connector.errors import Error as SnowflakeError
 
-from switch_pipeline.adapter.source import SnowflakeConnectionFactory, SourceTable
+from switch_pipeline.adapter.snowflake import SnowflakeConnectionFactory, SourceTable
 from switch_pipeline.settings import SeedSettings, SnowflakeSettings, SourceSettings
 
 # Needles are matched case-insensitively against the connector's error message.

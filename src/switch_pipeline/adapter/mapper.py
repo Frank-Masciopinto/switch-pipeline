@@ -10,7 +10,7 @@ from uuid import UUID
 
 from pydantic import JsonValue
 
-from switch_pipeline.adapter.source import SourceRow
+from switch_pipeline.adapter.ports import SourceContractError, SourceRow
 from switch_pipeline.domain.envelope import ChangeEvent, EventType, SourceRef
 
 
@@ -61,4 +61,4 @@ def to_json_value(value: object) -> JsonValue:
         case bytes() | bytearray():
             return base64.b64encode(value).decode("ascii")
         case _:
-            raise TypeError(f"unsupported source value type: {type(value).__name__}")
+            raise SourceContractError(f"unsupported source value type: {type(value).__name__}")

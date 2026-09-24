@@ -1,13 +1,14 @@
 """Adapter entry point: wires Snowflake, PostgreSQL state and Kafka together."""
 
+from contextlib import ExitStack
+
 from switch_pipeline.adapter.mapper import EventMapper
 from switch_pipeline.adapter.service import SyncService
-from switch_pipeline.adapter.source import (
+from switch_pipeline.adapter.snowflake import (
     SnowflakeChangeSource,
     SnowflakeConnectionFactory,
     SourceTable,
 )
-from switch_pipeline.adapter.state import PostgresSyncStateStore, SourceLock
 from switch_pipeline.domain.envelope import SourceRef
 from switch_pipeline.lifecycle import Heartbeat, Shutdown
 from switch_pipeline.observability import configure_logging, get_logger
@@ -21,6 +22,7 @@ from switch_pipeline.settings import (
     SourceSettings,
     load_settings,
 )
+from switch_pipeline.sink.sync_state import PostgresSyncStateStore, SourceLock
 from switch_pipeline.transport.admin import TopicAdmin
 from switch_pipeline.transport.producer import KafkaEventPublisher
 
@@ -43,64 +45,64 @@ def run_adapter(*, once: bool) -> int:
     source_id = source_id_for(table)
     shutdown = Shutdown().install_signal_handlers()
     heartbeat = Heartbeat(adapter.heartbeat_path)
-    conninfo = postgres.conninfo(application_name="switch-adapter")
 
     TopicAdmin(kafka, client_id="switch-adapter-admin").require_topic()
-    store = PostgresSyncStateStore(conninfo)
-    store.open(timeout=float(postgres.connect_timeout_seconds))
-    source = SnowflakeChangeSource(
-        SnowflakeConnectionFactory(snowflake, query_tag="switch-adapter"), table
-    )
-    publisher = KafkaEventPublisher(kafka, client_id="switch-adapter", sleep=shutdown.sleep)
-    try:
-        with SourceLock(conninfo, source_id) as lock:
-            recovered = store.recover_interrupted_batches(source_id)
-            if recovered:
-                log.warning("interrupted_batches_closed", count=recovered)
-            service = SyncService(
-                source_id=source_id,
-                source=source,
-                state_store=store,
-                publisher=publisher,
-                mapper=EventMapper(
-                    source=SourceRef(system="snowflake", object=table.qualified_name),
-                    entity_type=source_settings.entity_type,
-                ),
-                batch_size=adapter.batch_size,
-                settle_seconds=adapter.settle_seconds,
-                guard=lock,
-                stop_requested=shutdown.requested,
-                on_progress=heartbeat.beat,
-            )
+    # Closed in reverse order, each even if an earlier close raised.
+    with ExitStack() as resources:
+        store = PostgresSyncStateStore.open(postgres, application_name="switch-adapter")
+        resources.callback(store.close)
+        source = SnowflakeChangeSource(
+            SnowflakeConnectionFactory(snowflake, query_tag="switch-adapter"), table
+        )
+        resources.callback(source.close)
+        publisher = KafkaEventPublisher(kafka, client_id="switch-adapter", sleep=shutdown.sleep)
+        resources.callback(publisher.close)
+        lock = resources.enter_context(
+            SourceLock(postgres, source_id=source_id, application_name="switch-adapter")
+        )
+        recovered = store.recover_interrupted_batches(source_id)
+        if recovered:
+            log.warning("interrupted_batches_closed", count=recovered)
+        service = SyncService(
+            source_id=source_id,
+            source=source,
+            state_store=store,
+            publisher=publisher,
+            mapper=EventMapper(
+                source=SourceRef(system="snowflake", object=table.qualified_name),
+                entity_type=source_settings.entity_type,
+            ),
+            batch_size=adapter.batch_size,
+            settle_seconds=adapter.settle_seconds,
+            guard=lock,
+            stop_requested=shutdown.requested,
+            on_progress=heartbeat.beat,
+        )
+        log.info(
+            "adapter_started",
+            source_id=source_id,
+            topic=kafka.topic,
+            batch_size=adapter.batch_size,
+            settle_seconds=adapter.settle_seconds,
+            poll_interval_seconds=adapter.poll_interval_seconds,
+            run_once=once,
+        )
+        if once:
+            result = service.run_cycle()
             log.info(
-                "adapter_started",
-                source_id=source_id,
-                topic=kafka.topic,
-                batch_size=adapter.batch_size,
-                settle_seconds=adapter.settle_seconds,
-                poll_interval_seconds=adapter.poll_interval_seconds,
-                run_once=once,
+                "sync_cycle_completed",
+                mode=result.mode.value,
+                batches=result.batches,
+                rows=result.rows,
             )
-            if once:
-                result = service.run_cycle()
-                log.info(
-                    "sync_cycle_completed",
-                    mode=result.mode.value,
-                    batches=result.batches,
-                    rows=result.rows,
-                )
-            else:
-                service.run_forever(
-                    poll_interval_seconds=adapter.poll_interval_seconds,
-                    backoff=Backoff(
-                        adapter.retry_backoff_initial_seconds, adapter.retry_backoff_max_seconds
-                    ),
-                    shutdown=shutdown,
-                    heartbeat=heartbeat,
-                )
-    finally:
-        publisher.close()
-        source.close()
-        store.close()
+        else:
+            service.run_forever(
+                poll_interval_seconds=adapter.poll_interval_seconds,
+                backoff=Backoff(
+                    adapter.retry_backoff_initial_seconds, adapter.retry_backoff_max_seconds
+                ),
+                shutdown=shutdown,
+                heartbeat=heartbeat,
+            )
     log.info("adapter_stopped")
     return 0

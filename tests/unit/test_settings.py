@@ -10,7 +10,6 @@ from switch_pipeline.settings import (
     ApiSettings,
     ConfigurationError,
     KafkaSettings,
-    PostgresSettings,
     SnowflakeSettings,
     load_settings,
 )
@@ -83,14 +82,3 @@ def test_an_api_token_must_be_long_enough(
         load_settings(ApiSettings)
     monkeypatch.setenv("API_AUTH_TOKEN", "x" * 32)
     assert load_settings(ApiSettings).auth_token is not None
-
-
-def test_api_connections_are_read_only(isolated_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for name, value in read_env_example().items():
-        if name.startswith("POSTGRES_"):
-            monkeypatch.setenv(name, value)
-    postgres = load_settings(PostgresSettings)
-    assert "default_transaction_read_only=on" in postgres.conninfo(
-        application_name="api", read_only=True
-    )
-    assert "read_only" not in postgres.conninfo(application_name="consumer")

@@ -5,23 +5,27 @@ import psycopg
 import pytest
 
 from switch_pipeline.adapter.cursor import SyncCursor
-from switch_pipeline.adapter.state import (
-    PostgresSyncStateStore,
-    SourceLock,
-    SourceLockedError,
-    SyncMode,
-)
+from switch_pipeline.adapter.ports import SyncMode
 from switch_pipeline.errors import FatalPipelineError
+from switch_pipeline.settings import PostgresSettings
 from switch_pipeline.sink.migrate import apply_migrations
+from switch_pipeline.sink.sync_state import PostgresSyncStateStore, SourceLock, SourceLockedError
 from tests.helpers import T0
 
 SOURCE_ID = "snowflake:DB.S.T"
 
 
+def open_store(postgres: PostgresSettings) -> PostgresSyncStateStore:
+    return PostgresSyncStateStore.open(postgres, application_name="tests")
+
+
+def lock(postgres: PostgresSettings, source_id: str = SOURCE_ID) -> SourceLock:
+    return SourceLock(postgres, source_id=source_id, application_name="tests")
+
+
 @pytest.fixture
-def store(db: str) -> Iterator[PostgresSyncStateStore]:
-    state_store = PostgresSyncStateStore(db)
-    state_store.open(timeout=10)
+def store(db: str, postgres_settings: PostgresSettings) -> Iterator[PostgresSyncStateStore]:
+    state_store = open_store(postgres_settings)
     yield state_store
     state_store.close()
 
@@ -45,14 +49,13 @@ def test_a_new_source_starts_with_a_full_sync(store: PostgresSyncStateStore) -> 
 
 @pytest.mark.parametrize("key", [42, "ORD-42"])
 def test_the_watermark_survives_a_restart(
-    db: str, store: PostgresSyncStateStore, key: int | str
+    postgres_settings: PostgresSettings, store: PostgresSyncStateStore, key: int | str
 ) -> None:
     cursor = SyncCursor(updated_at=T0.replace(microsecond=654321), key=key)
     committed_batch(store, cursor)
     store.close()
 
-    restarted = PostgresSyncStateStore(db)
-    restarted.open(timeout=10)
+    restarted = open_store(postgres_settings)
     try:
         assert restarted.load(SOURCE_ID).cursor == cursor
     finally:
@@ -69,13 +72,13 @@ def test_a_failed_batch_does_not_move_the_watermark(db: str, store: PostgresSync
         cursor_start=SyncCursor(updated_at=T0, key=1),
         upper_bound=T0,
     )
-    store.fail_batch(batch_id=batch_id, error="PublishError: broker unavailable")
+    store.fail_batch(batch_id=batch_id, error="BrokerUnavailableError: broker unavailable")
     assert store.load(SOURCE_ID).cursor == SyncCursor(updated_at=T0, key=1)
     with psycopg.connect(db) as conn:
         status, error = conn.execute(
             "SELECT status, error FROM sync_batch WHERE batch_id = %s", (batch_id,)
         ).fetchone()  # type: ignore[misc]
-    assert (status, error) == ("failed", "PublishError: broker unavailable")
+    assert (status, error) == ("failed", "BrokerUnavailableError: broker unavailable")
 
 
 def test_batches_interrupted_by_a_crash_are_closed_on_restart(
@@ -109,19 +112,23 @@ def test_completing_the_initial_sync_switches_to_incremental(store: PostgresSync
     assert store.load(SOURCE_ID).mode is SyncMode.INCREMENTAL
 
 
-def test_only_one_adapter_can_sync_a_source_at_a_time(db: str) -> None:
-    with SourceLock(db, SOURCE_ID) as lock:
-        lock.check()
-        with pytest.raises(SourceLockedError), SourceLock(db, SOURCE_ID):
+def test_only_one_adapter_can_sync_a_source_at_a_time(
+    db: str, postgres_settings: PostgresSettings
+) -> None:
+    with lock(postgres_settings) as held:
+        held.check()
+        with pytest.raises(SourceLockedError), lock(postgres_settings):
             pass
-        with SourceLock(db, "snowflake:OTHER.S.T"):  # other sources are independent
+        with lock(postgres_settings, "snowflake:OTHER.S.T"):  # other sources are independent
             pass
-    with SourceLock(db, SOURCE_ID):  # released when its holder exits
+    with lock(postgres_settings):  # released when its holder exits
         pass
 
 
-def test_migrations_are_idempotent_and_edits_are_refused(migrated: str) -> None:
-    assert apply_migrations(migrated) == []
+def test_migrations_are_idempotent_and_edits_are_refused(
+    migrated: str, postgres_settings: PostgresSettings
+) -> None:
+    assert apply_migrations(postgres_settings, application_name="tests") == []
     with psycopg.connect(migrated, autocommit=True) as conn:
         original = conn.execute(
             "SELECT checksum FROM schema_migrations WHERE version = '0001_initial'"
@@ -131,7 +138,7 @@ def test_migrations_are_idempotent_and_edits_are_refused(migrated: str) -> None:
         )
         try:
             with pytest.raises(FatalPipelineError, match="changed after it was applied"):
-                apply_migrations(migrated)
+                apply_migrations(postgres_settings, application_name="tests")
         finally:
             conn.execute(
                 "UPDATE schema_migrations SET checksum = %s WHERE version = '0001_initial'",

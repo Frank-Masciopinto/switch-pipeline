@@ -4,14 +4,27 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 
 import snowflake.connector
 from snowflake.connector import DictCursor, SnowflakeConnection
-from snowflake.connector.errors import ProgrammingError
+from snowflake.connector.errors import (
+    BadGatewayError,
+    GatewayTimeoutError,
+    InterfaceError,
+    InternalServerError,
+    NonRetryableTlsError,
+    OperationalError,
+    OtherHTTPRetryableError,
+    ProgrammingError,
+    RequestTimeoutError,
+    ServiceUnavailableError,
+    TooManyRequests,
+)
 
 from switch_pipeline.adapter.cursor import SyncCursor
-from switch_pipeline.errors import FatalPipelineError
+from switch_pipeline.adapter.ports import SourceContractError, SourceRow
+from switch_pipeline.errors import SourceUnavailableError
 from switch_pipeline.observability import get_logger
 from switch_pipeline.settings import SNOWFLAKE_IDENTIFIER, SnowflakeSettings, SourceSettings
 
@@ -22,13 +35,20 @@ _IDENTIFIER = re.compile(SNOWFLAKE_IDENTIFIER)
 # Snowflake's "Object ... does not exist or not authorized" (tables, schemas, databases).
 OBJECT_MISSING_ERRNO = 2003
 
-
-class SourceContractError(FatalPipelineError):
-    """A row violates the source contract (e.g. NULL key, version or timestamp)."""
-
-
-class SourceUnavailableError(Exception):
-    """The source table is missing or not visible to the role; retried until it appears."""
+# Connectivity failures, which can succeed once the network or the service
+# recovers. Everything else (bad SQL, missing grants, rejected sign-in, TLS
+# misconfiguration) needs a person, so it is not retried.
+_UNREACHABLE: tuple[type[Exception], ...] = (
+    OperationalError,
+    InterfaceError,
+    InternalServerError,
+    ServiceUnavailableError,
+    BadGatewayError,
+    GatewayTimeoutError,
+    RequestTimeoutError,
+    OtherHTTPRetryableError,
+    TooManyRequests,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,30 +86,6 @@ class SourceTable:
     @property
     def contract_columns(self) -> tuple[str, str, str]:
         return (self.key_column, self.version_column, self.updated_at_column)
-
-
-@dataclass(frozen=True, slots=True)
-class SourceRow:
-    key: int | str
-    version: int
-    updated_at: datetime  # timezone-aware UTC
-    values: Mapping[str, Any]  # the full row, column name -> Python value
-
-    @property
-    def position(self) -> SyncCursor:
-        return SyncCursor(updated_at=self.updated_at, key=self.key)
-
-
-class ChangeSource(Protocol):
-    def upper_bound(self, settle_seconds: int) -> datetime:
-        """The newest ``updated_at`` this cycle may read (source clock, UTC)."""
-        ...
-
-    def fetch_changes(
-        self, cursor: SyncCursor | None, upper_bound: datetime, limit: int
-    ) -> list[SourceRow]:
-        """Rows strictly after ``cursor`` and at or before ``upper_bound``, in watermark order."""
-        ...
 
 
 def build_changes_query(
@@ -168,8 +164,11 @@ class SnowflakeConnectionFactory:
 
 
 class SnowflakeChangeSource:
-    """Keeps one session open across cycles and drops it after any error, so the
-    next cycle reconnects cleanly (expired sessions, network blips)."""
+    """Implements the adapter's ChangeSource port.
+
+    Keeps one session open across cycles and drops it after any error, so the
+    next cycle reconnects cleanly (expired sessions, network blips).
+    """
 
     def __init__(self, factory: SnowflakeConnectionFactory, table: SourceTable) -> None:
         self._factory = factory
@@ -190,32 +189,38 @@ class SnowflakeChangeSource:
         return [self._to_row(record) for record in self._query(query, params)]
 
     def close(self) -> None:
-        if self._connection is not None:
-            try:
-                self._connection.close()
-            finally:
-                self._connection = None
+        self._discard_connection()
 
     def _query(self, query: str, params: dict[str, object]) -> list[dict[str, Any]]:
-        if self._connection is None:
-            self._connection = self._factory.connect()
-            log.info("snowflake_connected", table=self._table.qualified_name)
         try:
+            if self._connection is None:
+                self._connection = self._factory.connect()
+                log.info("snowflake_connected", table=self._table.qualified_name)
             with self._connection.cursor(DictCursor) as cursor:
                 cursor.execute(query, params)
                 rows: list[dict[str, Any]] = cursor.fetchall()
                 return rows
-        except ProgrammingError as exc:
-            self.close()
-            if exc.errno == OBJECT_MISSING_ERRNO:
+        except BaseException as exc:
+            self._discard_connection()
+            if isinstance(exc, ProgrammingError) and exc.errno == OBJECT_MISSING_ERRNO:
                 raise SourceUnavailableError(
                     f"{self._table.qualified_name} does not exist or the role cannot see it: "
                     "run `make seed`, or check the grants in snowflake/setup.sql"
                 ) from exc
+            if isinstance(exc, _UNREACHABLE) and not isinstance(exc, NonRetryableTlsError):
+                raise SourceUnavailableError(f"Snowflake is unreachable: {exc}") from exc
             raise
+
+    def _discard_connection(self) -> None:
+        connection, self._connection = self._connection, None
+        if connection is None:
+            return
+        try:
+            connection.close()
         except Exception:
-            self.close()
-            raise
+            # Closing a session that just failed often fails as well; that
+            # second error must not replace the one that explains the failure.
+            log.warning("snowflake_close_failed", exc_info=True)
 
     def _to_row(self, record: Mapping[str, Any]) -> SourceRow:
         values = {name.upper(): value for name, value in record.items()}

@@ -18,8 +18,8 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from switch_pipeline.domain.envelope import EventType
-from switch_pipeline.errors import DatabaseUnavailableError
 from switch_pipeline.settings import PostgresSettings
+from switch_pipeline.sink.connection import conninfo, unavailable
 from switch_pipeline.sink.queries import SINK_CHECKSUMS
 
 Row = dict[str, Any]
@@ -76,7 +76,7 @@ class EventFilters:
 class SinkReader:
     def __init__(self, postgres: PostgresSettings, *, application_name: str) -> None:
         self._pool = AsyncConnectionPool(
-            postgres.conninfo(application_name=application_name, read_only=True),
+            conninfo(postgres, application_name=application_name, read_only=True),
             min_size=postgres.pool_min_size,
             max_size=postgres.pool_max_size,
             timeout=float(postgres.connect_timeout_seconds),
@@ -253,7 +253,7 @@ class SinkReader:
             async with self._pool.connection(timeout=timeout_seconds) as conn:
                 yield conn
         except psycopg.OperationalError as exc:  # includes PoolTimeout
-            raise DatabaseUnavailableError(f"PostgreSQL unavailable: {str(exc).strip()}") from exc
+            raise unavailable(exc) from exc
 
 
 def _where(conditions: list[sql.Composable]) -> sql.Composable:
