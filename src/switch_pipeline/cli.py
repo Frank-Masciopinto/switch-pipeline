@@ -12,14 +12,13 @@ from switch_pipeline.adapter.main import run_adapter
 from switch_pipeline.api.main import run_api
 from switch_pipeline.consumer.main import run_consumer
 from switch_pipeline.domain.envelope import envelope_json_schema
-from switch_pipeline.errors import FatalPipelineError, RetryableError
+from switch_pipeline.errors import ConfigurationError, FatalPipelineError, RetryableError
 from switch_pipeline.lifecycle import Shutdown
 from switch_pipeline.observability import configure_logging, get_logger
 from switch_pipeline.quality.rules import load_rules
 from switch_pipeline.settings import (
     AdapterSettings,
     ApiSettings,
-    ConfigurationError,
     ConsumerSettings,
     KafkaSettings,
     LogSettings,

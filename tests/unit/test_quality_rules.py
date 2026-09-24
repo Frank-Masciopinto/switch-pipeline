@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from pydantic import JsonValue, ValidationError
 
+from switch_pipeline.errors import ConfigurationError
 from switch_pipeline.quality.rules import RuleSet, Severity, load_rules
 from tests.helpers import REPO_ROOT, T0, make_event, order_payload, rule
 
@@ -112,6 +113,33 @@ def test_shipped_rules_file_is_valid_and_rejects_bad_orders() -> None:
         "total_price_non_negative",
         "order_status_known",
     }
+
+
+@pytest.mark.parametrize(
+    ("content", "problem"),
+    [
+        (
+            "version: 1\nentities:\n  order:\n"
+            "  - {name: r, description: d, field: f, severity: reject, check: nope}\n",
+            r"invalid quality rules in .*\n  - entities\.order\.0",
+        ),
+        ("version: 1\nentities: [not closed\n", "is not valid YAML"),
+    ],
+    ids=["unknown-check", "broken-yaml"],
+)
+def test_a_broken_rules_file_is_a_configuration_error_naming_the_file(
+    tmp_path: Path, content: str, problem: str
+) -> None:
+    path = tmp_path / "rules.yaml"
+    path.write_text(content)
+    with pytest.raises(ConfigurationError, match=problem) as caught:
+        load_rules(path)
+    assert str(path) in str(caught.value)
+
+
+def test_a_missing_rules_file_is_a_configuration_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="cannot read the quality rules file"):
+        load_rules(tmp_path / "absent.yaml")
 
 
 def test_fingerprint_changes_with_semantics_not_formatting(tmp_path: Path) -> None:

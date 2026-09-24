@@ -12,16 +12,14 @@ from typing import Annotated, Literal, TypeVar
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from switch_pipeline.errors import ConfigurationError
+
 SNOWFLAKE_IDENTIFIER = r"^[A-Za-z_][A-Za-z0-9_$]*$"
 
 Identifier = Annotated[str, Field(pattern=SNOWFLAKE_IDENTIFIER, max_length=255)]
 PositiveInt = Annotated[int, Field(gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0)]
 Port = Annotated[int, Field(ge=1, le=65535)]
-
-
-class ConfigurationError(Exception):
-    """Required settings are missing or invalid."""
 
 
 class _EnvSettings(BaseSettings):

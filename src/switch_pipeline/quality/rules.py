@@ -18,9 +18,18 @@ from pathlib import Path
 from typing import Annotated, Literal, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from switch_pipeline.domain.envelope import ENTITY_TYPE_PATTERN, ChangeEvent
+from switch_pipeline.errors import ConfigurationError
 
 
 class Severity(StrEnum):
@@ -235,8 +244,22 @@ class LoadedRuleSet:
 
 
 def load_rules(path: Path) -> LoadedRuleSet:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    rules = RuleSet.model_validate(raw)
+    """Read and validate the rules file; ConfigurationError says what is wrong with it."""
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        rules = RuleSet.model_validate(raw)
+    except OSError as exc:
+        raise ConfigurationError(f"cannot read the quality rules file {path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ConfigurationError(f"{path} is not valid YAML: {exc}") from exc
+    except ValidationError as exc:
+        problems = [
+            f"  - {'.'.join(str(part) for part in error['loc']) or '(file)'}: {error['msg']}"
+            for error in exc.errors(include_url=False, include_input=False)
+        ]
+        raise ConfigurationError(
+            f"invalid quality rules in {path}:\n" + "\n".join(problems)
+        ) from exc
     fingerprint = hashlib.sha256(rules.model_dump_json().encode("utf-8")).hexdigest()[:16]
     return LoadedRuleSet(rules=rules, fingerprint=fingerprint, path=path)
 

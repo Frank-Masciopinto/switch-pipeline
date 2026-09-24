@@ -28,13 +28,13 @@ ADAPTER_PORTS = (f"{ROOT}.adapter.ports", f"{ROOT}.adapter.cursor")
 LAYERS: dict[str, tuple[str, ...]] = {
     # Shared kernel.
     ERRORS: (),
-    SETTINGS: (),
+    SETTINGS: (ERRORS,),
     RETRY: (),
     LIFECYCLE: (),
     OBSERVABILITY: (SETTINGS,),
     # Domain: the change event, quarantine and log vocabulary, and the rules.
     DOMAIN: (DOMAIN,),
-    QUALITY: (DOMAIN, QUALITY),
+    QUALITY: (DOMAIN, QUALITY, ERRORS),
     # Application logic.
     f"{ROOT}.adapter": (
         *ADAPTER_PORTS,

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from switch_pipeline.errors import ConfigurationError
 from switch_pipeline.settings import (
     ApiSettings,
-    ConfigurationError,
     KafkaSettings,
     SnowflakeSettings,
     load_settings,

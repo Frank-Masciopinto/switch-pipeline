@@ -37,6 +37,18 @@ def test_check_config_accepts_the_template_and_the_rules_file(
     assert report["quality_rules"]["order"] >= 3
 
 
+def test_check_config_rejects_a_broken_rules_file_with_exit_2(
+    no_config: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (no_config / ".env").write_text((REPO_ROOT / ".env.example").read_text())
+    monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "myorg-myaccount")
+    rules = no_config / "rules.yaml"
+    rules.write_text("version: 1\nentities:\n  order: {}\n")
+    monkeypatch.setenv("QUALITY_RULES_PATH", str(rules))
+    assert cli.main(["check-config"]) == 2
+    assert f"configuration error: invalid quality rules in {rules}" in capsys.readouterr().err
+
+
 def test_export_schema_reproduces_the_committed_schema(tmp_path: Path) -> None:
     output = tmp_path / "schema.json"
     assert cli.main(["export-schema", "--output", str(output)]) == 0

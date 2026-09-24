@@ -4,11 +4,17 @@
   database, a source table that does not exist yet). Workers retry with backoff.
 - ``FatalPipelineError``: retrying cannot fix it (misconfiguration, a broken
   contract). The worker stops and the process exits non-zero.
+- ``ConfigurationError``: .env or the quality rules file is invalid; reported
+  before any work starts (exit code 2).
 - Anything else is a bug or a failure nobody anticipated. It is not retried
   either: the worker stops and logs the traceback.
 
 State only advances after a durable write, so stopping never loses data.
 """
+
+
+class ConfigurationError(Exception):
+    """Settings or the quality rules file are missing or invalid."""
 
 
 class RetryableError(Exception):
