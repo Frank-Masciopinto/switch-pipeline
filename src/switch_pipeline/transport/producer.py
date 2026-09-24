@@ -18,7 +18,7 @@ from switch_pipeline.errors import BrokerUnavailableError, FatalPipelineError
 from switch_pipeline.observability import get_logger
 from switch_pipeline.retry import Backoff
 from switch_pipeline.settings import KafkaSettings
-from switch_pipeline.transport.codec import encode
+from switch_pipeline.transport.codec import OutboundMessage, encode
 from switch_pipeline.transport.config import producer_config
 
 log = get_logger(__name__)
@@ -135,6 +135,33 @@ class KafkaEventPublisher:
                 raise BrokerUnavailableError(message) from exc
             else:
                 return
+
+
+def publish_raw(
+    settings: KafkaSettings, records: Sequence[OutboundMessage], *, client_id: str
+) -> None:
+    """Send records exactly as given, once, e.g. deliberately invalid ones for testing."""
+    errors: list[KafkaError] = []
+
+    def on_delivery(error: KafkaError | None, _message: Message) -> None:
+        if error is not None:
+            errors.append(error)
+
+    producer = Producer(producer_config(settings, client_id=client_id))
+    for record in records:
+        producer.produce(
+            settings.topic,
+            value=record.value,
+            key=record.key,
+            headers=record.headers,
+            on_delivery=on_delivery,
+        )
+    still_queued = producer.flush(settings.delivery_timeout_ms / 1000 + _FLUSH_GRACE_SECONDS)
+    if still_queued or errors:
+        detail = f": {errors[0].str()}" if errors else ""
+        raise BrokerUnavailableError(
+            f"{still_queued + len(errors)} of {len(records)} records not delivered{detail}"
+        )
 
 
 def _on_delivery(
