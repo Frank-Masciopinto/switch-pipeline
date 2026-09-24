@@ -28,7 +28,7 @@ def process(sink: PostgresSink, messages: list[InboundMessage]) -> Counter[Outco
 
 def query(conninfo: str, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     with psycopg.connect(conninfo) as conn:
-        return conn.cursor(row_factory=dict_row).execute(sql, params).fetchall()  # type: ignore[arg-type]
+        return conn.cursor(row_factory=dict_row).execute(sql, params).fetchall()
 
 
 def current(conninfo: str, key: str) -> dict[str, Any]:

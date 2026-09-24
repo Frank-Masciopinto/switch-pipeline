@@ -86,7 +86,7 @@ class Pipeline:
 
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         with psycopg.connect(self.db) as conn:
-            return conn.cursor(row_factory=dict_row).execute(sql, params).fetchall()  # type: ignore[arg-type]
+            return conn.cursor(row_factory=dict_row).execute(sql, params).fetchall()
 
     def close(self) -> None:
         self.publisher.close()

@@ -120,7 +120,9 @@ def settings_variables() -> set[str]:
 
 def logged(output: str, event: str) -> dict[str, Any]:
     """The last JSON log line for ``event`` in captured output."""
-    records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    records: list[dict[str, Any]] = [
+        json.loads(line) for line in output.splitlines() if line.startswith("{")
+    ]
     matching = [record for record in records if record.get("event") == event]
     assert matching, f"no {event!r} line in the output"
     return matching[-1]

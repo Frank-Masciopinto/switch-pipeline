@@ -7,6 +7,7 @@ import uuid
 from confluent_kafka import OFFSET_BEGINNING, Consumer, TopicPartition
 from testcontainers.community.kafka import RedpandaContainer
 
+from switch_pipeline.lifecycle import Shutdown
 from switch_pipeline.settings import KafkaSettings
 from switch_pipeline.transport.admin import TopicAdmin
 from switch_pipeline.transport.producer import KafkaEventPublisher
@@ -47,9 +48,7 @@ def test_events_published_during_a_broker_outage_are_delivered_once_it_returns(
         update={"delivery_timeout_ms": 2_000, "publish_max_attempts": 10}
     )
     TopicAdmin(settings, client_id="tests").ensure_topic()
-    publisher = KafkaEventPublisher(
-        settings, client_id="tests", sleep=lambda s: bool(time.sleep(s))
-    )
+    publisher = KafkaEventPublisher(settings, client_id="tests", sleep=Shutdown().sleep)
     events = [make_event(key=key) for key in range(1, 41)]
 
     broker = redpanda.get_wrapped_container()

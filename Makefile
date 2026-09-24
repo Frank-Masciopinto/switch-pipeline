@@ -120,8 +120,8 @@ fmt: ## Auto-format and fix lint
 	$(UV) run ruff format src tests
 	$(UV) run ruff check --fix src tests
 
-typecheck: ## mypy --strict
-	$(UV) run mypy src
+typecheck: ## mypy --strict, on the code and the tests
+	$(UV) run mypy src tests
 
 test-unit: ## Unit tests (no Docker)
 	$(UV) run pytest tests/unit

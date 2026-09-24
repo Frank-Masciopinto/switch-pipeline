@@ -22,7 +22,7 @@ jobs:
           uv run ruff check src tests
           uv run ruff format --check src tests
       - name: Type check
-        run: uv run mypy src
+        run: uv run mypy src tests
       - name: Tests with coverage gate (Postgres, Redpanda, Snowflake emulator)
         run: uv run pytest --cov --cov-report=term
 
