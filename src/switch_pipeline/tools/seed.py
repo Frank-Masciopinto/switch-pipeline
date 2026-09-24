@@ -34,7 +34,7 @@ def seed_source(
 ) -> SeedReport:
     table = SourceTable.from_settings(snowflake, source)
     factory = SnowflakeConnectionFactory(snowflake, query_tag="switch-seed")
-    with closing(factory.connect()) as conn, closing(conn.cursor(DictCursor)) as cursor:
+    with factory.session() as conn, closing(conn.cursor(DictCursor)) as cursor:
         # The setup script creates the database for a least-privileged role;
         # creating it here only happens where that is allowed (e.g. the emulator).
         if not _exists(cursor, "SHOW DATABASES LIKE %(name)s", table.database):

@@ -1,19 +1,17 @@
 import json
+import socket
 from pathlib import Path
 
 import pytest
 from structlog.testing import capture_logs
 
 from switch_pipeline import __version__, cli
-from switch_pipeline.errors import FatalPipelineError
-from tests.helpers import REPO_ROOT, read_env_example
+from tests.helpers import REPO_ROOT, exception_types, logged, read_env_example
 
 
 @pytest.fixture
-def no_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """No inherited variables and no .env in the working directory."""
-    for name in read_env_example():
-        monkeypatch.delenv(name, raising=False)
+def no_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An empty working directory: no .env file."""
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -46,27 +44,33 @@ def test_export_schema_reproduces_the_committed_schema(tmp_path: Path) -> None:
     assert output.read_text() == committed.read_text()
 
 
-@pytest.mark.parametrize(
-    ("error", "event"),
-    [
-        (FatalPipelineError("broken contract"), "fatal_error"),
-        (RuntimeError("bug"), "unhandled_error"),
-    ],
-)
-def test_failures_are_logged_as_structured_errors_and_exit_1(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, event: str
-) -> None:
-    def fail(_: object) -> int:
-        raise error
-
-    monkeypatch.setattr(cli, "_export_schema", fail)
+def test_an_unexpected_error_is_logged_with_its_traceback_and_exits_1(tmp_path: Path) -> None:
     with capture_logs() as logs:
-        assert cli.main(["export-schema"]) == 1
+        assert cli.main(["export-schema", "--output", str(tmp_path)]) == 1  # a directory
     assert (logs[-1]["event"], logs[-1]["log_level"], logs[-1]["exc_info"]) == (
-        event,
+        "unhandled_error",
         "error",
         True,
     )
+
+
+def test_an_unreachable_database_is_reported_as_unavailable_and_exits_1(
+    entrypoint_state: None,
+    no_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with socket.socket() as probe:  # a port nothing listens on
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    for name, value in read_env_example().items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("POSTGRES_HOST", "127.0.0.1")
+    monkeypatch.setenv("POSTGRES_PORT", str(closed_port))
+    assert cli.main(["migrate"]) == 1
+    record = logged(capsys.readouterr().out, "dependency_unavailable")
+    assert record["level"] == "error"
+    assert "DatabaseUnavailableError" in exception_types(record)
 
 
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:

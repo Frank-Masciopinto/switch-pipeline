@@ -1,5 +1,6 @@
 """Test data builders shared by unit and integration tests."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,19 @@ def settings_variables() -> set[str]:
             alias = field.validation_alias
             names.add(alias if isinstance(alias, str) else f"{prefix}{field_name}".upper())
     return names
+
+
+def logged(output: str, event: str) -> dict[str, Any]:
+    """The last JSON log line for ``event`` in captured output."""
+    records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    matching = [record for record in records if record.get("event") == event]
+    assert matching, f"no {event!r} line in the output"
+    return matching[-1]
+
+
+def exception_types(record: dict[str, Any]) -> set[str]:
+    """Every exception type in a logged traceback, causes included."""
+    return {stack["exc_type"] for stack in record["exception"]}
 
 
 def read_env_example() -> dict[str, str]:

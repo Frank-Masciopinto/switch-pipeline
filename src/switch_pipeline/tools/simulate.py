@@ -45,10 +45,8 @@ def simulate_changes(
 
     # autocommit=False + commit() rather than BEGIN/COMMIT statements: the same
     # code then runs on Snowflake and on the fakesnow emulator.
-    conn = SnowflakeConnectionFactory(snowflake, query_tag="switch-simulate").connect(
-        autocommit=False
-    )
-    try:
+    factory = SnowflakeConnectionFactory(snowflake, query_tag="switch-simulate")
+    with factory.session(autocommit=False) as conn:
         cursor = conn.cursor()
         cursor.execute(f"SELECT COALESCE(MAX({key}), 0) FROM {name}")  # noqa: S608 - validated
         row = cursor.fetchone()
@@ -100,11 +98,6 @@ def simulate_changes(
                 )
             report.invalid.append({"key": target, "kind": kind})
         conn.commit()
-    except BaseException:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
     log.info(
         "changes_simulated",
         table=name,

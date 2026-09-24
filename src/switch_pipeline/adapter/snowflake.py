@@ -1,7 +1,8 @@
 """Snowflake source: reads changed rows of one table in watermark order."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -162,6 +163,20 @@ class SnowflakeConnectionFactory:
                 params["protocol"] = settings.protocol
         return snowflake.connector.connect(**params)
 
+    @contextmanager
+    def session(self, *, autocommit: bool = True) -> Iterator[SnowflakeConnection]:
+        """A connection, closed on exit. After a failure it is rolled back first,
+        and cleanup errors are logged rather than raised over the failure."""
+        connection = self.connect(autocommit=autocommit)
+        try:
+            yield connection
+        except BaseException:
+            if not autocommit:
+                _cleanup_quietly(connection.rollback)
+            _cleanup_quietly(connection.close)
+            raise
+        connection.close()
+
 
 class SnowflakeChangeSource:
     """Implements the adapter's ChangeSource port.
@@ -213,14 +228,8 @@ class SnowflakeChangeSource:
 
     def _discard_connection(self) -> None:
         connection, self._connection = self._connection, None
-        if connection is None:
-            return
-        try:
-            connection.close()
-        except Exception:
-            # Closing a session that just failed often fails as well; that
-            # second error must not replace the one that explains the failure.
-            log.warning("snowflake_close_failed", exc_info=True)
+        if connection is not None:
+            _cleanup_quietly(connection.close)
 
     def _to_row(self, record: Mapping[str, Any]) -> SourceRow:
         values = {name.upper(): value for name, value in record.items()}
@@ -235,4 +244,15 @@ class SnowflakeChangeSource:
             )
         return SourceRow(
             key=key, version=version, updated_at=from_source_timestamp(updated_at), values=values
+        )
+
+
+def _cleanup_quietly(step: Callable[[], object]) -> None:
+    # Cleaning up a session that just failed often fails as well; that second
+    # error must not replace the one that explains what went wrong.
+    try:
+        step()
+    except Exception:
+        log.warning(
+            "snowflake_cleanup_failed", step=getattr(step, "__name__", repr(step)), exc_info=True
         )

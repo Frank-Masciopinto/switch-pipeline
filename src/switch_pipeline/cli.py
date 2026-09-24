@@ -12,7 +12,7 @@ from switch_pipeline.adapter.main import run_adapter
 from switch_pipeline.api.main import run_api
 from switch_pipeline.consumer.main import run_consumer
 from switch_pipeline.domain.envelope import envelope_json_schema
-from switch_pipeline.errors import FatalPipelineError
+from switch_pipeline.errors import FatalPipelineError, RetryableError
 from switch_pipeline.lifecycle import Shutdown
 from switch_pipeline.observability import configure_logging, get_logger
 from switch_pipeline.quality.rules import load_rules
@@ -53,6 +53,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     except FatalPipelineError:
         log.exception("fatal_error")
+        return 1
+    except RetryableError:
+        # A worker's retry budget ran out, or a one-shot command met a
+        # dependency that is down: running it again later can succeed.
+        log.exception("dependency_unavailable")
         return 1
     except KeyboardInterrupt:
         return 130

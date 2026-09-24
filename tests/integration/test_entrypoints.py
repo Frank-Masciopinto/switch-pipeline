@@ -1,20 +1,16 @@
 """The real CLI entry points, wired from environment variables the way the
 containers run them: proves the composition roots, not just the components."""
 
-import logging
-import signal
 import uuid
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
-import structlog
 
 from switch_pipeline import cli
 from switch_pipeline.settings import KafkaSettings, PostgresSettings
-from tests.helpers import read_env_example
+from tests.helpers import exception_types, logged, read_env_example
 from tests.integration.conftest import RULES_PATH
 
 SEEDED_ROWS = 40
@@ -22,13 +18,14 @@ SEEDED_ROWS = 40
 
 @pytest.fixture
 def pipeline_env(
+    entrypoint_state: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     db: str,
     postgres_settings: PostgresSettings,
     kafka_settings: KafkaSettings,
     snowflake_server: dict[str, Any],
-) -> Iterator[None]:
+) -> None:
     """.env.example, pointed at the test containers and the emulator."""
     overrides = {
         "SNOWFLAKE_ACCOUNT": snowflake_server["account"],
@@ -59,17 +56,6 @@ def pipeline_env(
         monkeypatch.setenv(name, value)
     monkeypatch.chdir(tmp_path)  # no .env file: the environment is the only source
 
-    root = logging.getLogger()
-    handlers, level = root.handlers[:], root.level
-    signal_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
-    yield
-    for sig, handler in signal_handlers.items():
-        signal.signal(sig, handler)
-    root.handlers[:] = handlers
-    root.setLevel(level)
-    structlog.reset_defaults()
-    structlog.contextvars.clear_contextvars()
-
 
 def count(db: str, table: str) -> int:
     with psycopg.connect(db) as conn:
@@ -93,3 +79,12 @@ def test_the_cli_runs_the_pipeline_from_environment_variables(pipeline_env: None
     assert count(db, "event_log") == SEEDED_ROWS + 2 + 3
     assert count(db, "quarantine") == 1
     assert count(db, "sync_batch") == 2
+
+
+def test_a_consumer_started_before_init_stops_with_a_fatal_error(
+    pipeline_env: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["consumer"]) == 1, "the topic was never created"
+    record = logged(capsys.readouterr().out, "fatal_error")
+    assert record["level"] == "error"
+    assert "FatalPipelineError" in exception_types(record)
